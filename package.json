@@ -22,6 +22,7 @@
   },
   "homepage": "https://github.com/alexfazio/plankton#readme",
   "devDependencies": {
-    "@biomejs/biome": "^2.3.15"
+    "@biomejs/biome": "^2.3.15",
+    "oxlint": "^1.49.0"
   }
 }

@@ -1,6 +1,6 @@
 # ADR: Hook Integration Testing via TeamCreate Agents
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-02-20
 **Author**: alex fazio + Claude Code clarification interview
 
@@ -11,7 +11,7 @@ without a verifiable source are marked `[verify: unresolved]`.
 
 **Document type**: This is a hybrid ADR/test-specification. The
 decisions (D1–D11) capture architectural choices; the test case
-inventories (M01–M38, P01–P28, DEP01–DEP24) are the operational
+inventories (M01–M42, P01–P32, DEP01–DEP29) are the operational
 specification that flows from those decisions. The document is
 designed for direct consumption by an orchestrator agent that will
 create an execution plan and run the test suite.
@@ -26,11 +26,11 @@ live Claude Code hook lifecycle. There is no structured proof that:
 
 1. Each hook accepts properly-formed JSON and returns the correct
    `decision` structure per the README contract
-   [verify: docs/README.md §Hook Schema Reference]
+   [verify: docs/REFERENCE.md §Hook Schema Reference]
 2. All required dependencies are installed and reachable
-   [verify: docs/README.md §Dependencies]
+   [verify: docs/REFERENCE.md §Dependencies]
 3. Hooks fire correctly in a live Claude Code session
-   [verify: docs/README.md §Hook Invocation Behavior]
+   [verify: docs/REFERENCE.md §Hook Invocation Behavior]
 4. Every documented scenario (violations, passthroughs, compound
    commands, config modes) produces the output described in the ADRs
 
@@ -39,7 +39,7 @@ live Claude Code hook lifecycle. There is no structured proof that:
 - **Real contract coverage**: test_hook.sh tests the harness, not
   the hooks' stdin→stdout JSON contract directly
 - **Environment assurance**: Dependencies can silently degrade
-  (e.g., hadolint < 2.12.0 [verify: docs/README.md §hadolint
+  (e.g., hadolint < 2.12.0 [verify: docs/REFERENCE.md §hadolint
   Version Check]) without detection until a hook misbehaves
 - **Durable audit trail**: A machine-readable JSONL log enables
   future comparisons and CI integration
@@ -72,7 +72,7 @@ excluded from dedicated agents:
   TeamCreate session; (2) TeamCreate teammates trigger the
   `TeammateIdle` lifecycle event, not `Stop` — the Stop event is
   architecturally unreachable from a teammate context
-  [verify: docs/README.md §Testing Stop Hook §Integration test]
+  [verify: docs/REFERENCE.md §Testing Stop Hook §Integration test]
 
 **Alternatives considered**:
 
@@ -131,6 +131,16 @@ but the trap ensures cleanup even when `timeout` kills a test
 before its cleanup line executes. The parent process (agent) always
 runs the EXIT trap regardless of how child processes terminate.
 
+**TOML fixture path constraint**: TOML tests (M09, M10) MUST use
+in-project paths (e.g., `.claude/tests/hooks/hook_test_XXXXXX.toml`)
+instead of `/tmp/`. The project's `taplo.toml` has
+`include = ["**/*.toml"]` which resolves relative to the project
+root — taplo silently ignores files outside this scope, causing
+tests to false-pass with exit 0 and no output
+[verify: taplo.toml §include pattern]. The cleanup trap for TOML
+fixtures uses the in-project path:
+`trap 'rm -f .claude/tests/hooks/hook_test_*.toml' EXIT`.
+
 **Alternatives considered**:
 
 | Option | Pros | Cons | Verdict |
@@ -159,7 +169,7 @@ echo '{"tool_input": {"file_path": "/tmp/test.py"}}' \
 
 This IS the real execution path — Claude Code delivers input to
 hooks as JSON on stdin; the hook returns JSON stdout and exit code.
-[verify: docs/README.md §Testing Hooks Manually, §Hook Schema Reference]
+[verify: docs/REFERENCE.md §Testing Hooks Manually, §Hook Schema Reference]
 
 **Layer 2 — Live in-session trigger**:
 
@@ -185,17 +195,17 @@ registration, not just the script's stdin/stdout behavior.
   outcomes prove the hook lifecycle is active. Non-determinism is
   accepted: M19 does NOT use `HOOK_SKIP_SUBPROCESS` because the
   goal is lifecycle confirmation, not fix behavior testing.
-  [verify: docs/README.md §Hook Invocation Behavior]
+  [verify: docs/REFERENCE.md §Hook Invocation Behavior]
 - pm-agent (P28): Issues `Bash pip install requests`. PreToolUse
   hook fires and blocks the command. Confirmed when the tool
   result contains the substring `"hook:block"` — the block reason
   from `enforce_package_managers.sh`.
-  [verify: docs/README.md §Hook Invocation Behavior]
+  [verify: docs/REFERENCE.md §Hook Invocation Behavior]
 
 ### D4: ml-agent Test Scope — All File Types
 
 **Decision**: ml-agent tests all file types that multi_linter.sh
-handles [verify: docs/README.md §Linter Behavior by File Type],
+handles [verify: docs/REFERENCE.md §Linter Behavior by File Type],
 plus conflict/interaction scenarios (M24–M31) and cross-language
 toggle tests (M32–M38).
 
@@ -224,14 +234,24 @@ confirm that clean files of each type are accepted without false
 positives.
 
 **TypeScript/JS/CSS gate**: These tests require Biome
-[verify: docs/README.md §Dependencies §Optional]. If `biome` or
-`npx biome` is not found, log M15–M18 as
+[verify: docs/REFERENCE.md §Dependencies §Optional]. If the
+`detect_biome()` chain finds no biome, log M15–M18 as
 `pass: false, note: "BIOME_ABSENT"` and mark the suite as failed.
 Biome is required (not optional) for this test run per the user's
 explicit requirement. Tests M15–M18 use a `CLAUDE_PROJECT_DIR`
 override pointing to a temp directory containing a `config.json`
 with `typescript.enabled: true` (matching the project's current
-default config).
+default config) **and a `biome.json`** created with the required linter rules
+(no `biome.json` exists at the project root — biome uses default
+settings when no config is present, so the test must create one).
+The `biome.json` is required because `multi_linter.sh` invokes
+biome with `cd "${CLAUDE_PROJECT_DIR:-.}" && biome lint ...` — biome
+looks for its config file in the working directory
+[verify: .claude/hooks/multi_linter.sh §_lint_typescript §cd].
+Without `biome.json` in the temp `CLAUDE_PROJECT_DIR`, biome uses
+default settings which may produce non-deterministic results.
+This is especially critical for M28 (`ts_nursery_error`) which
+depends on biome's nursery rule configuration.
 
 **Config isolation guarantee (ml-agent)**: Config-dependent tests
 (M15–M18 and M20–M23) each create their own temp directory with a
@@ -247,12 +267,12 @@ to that specific subprocess only. Same mechanism as pm-agent's P25–P27
 `HOOK_SKIP_SUBPROCESS=1` for deterministic exit codes. Without it,
 the hook spawns `claude -p` which may fix violations and exit 0
 regardless of the input content.
-[verify: docs/README.md §Testing Environment Variables]
+[verify: docs/REFERENCE.md §Testing Environment Variables]
 
 **Live trigger test (M19)**: ml-agent calls `Edit` on a temp `.py`
 file with an F841 violation and observes that the PostToolUse hook
 fires. This confirms hook lifecycle registration.
-[verify: docs/README.md §Hook Invocation Behavior]
+[verify: docs/REFERENCE.md §Hook Invocation Behavior]
 
 ### D5: pm-agent Test Scope — All PM Scenarios
 
@@ -344,14 +364,14 @@ Test cases:
 **Live trigger test (P28)**: pm-agent issues
 `Bash pip install requests` via its Bash tool and confirms the
 PreToolUse hook blocks the command.
-[verify: docs/README.md §Hook Invocation Behavior]
+[verify: docs/REFERENCE.md §Hook Invocation Behavior]
 
 ### D6: dep-agent Test Scope — Dependencies and Registration
 
 **Decision**: dep-agent audits two categories:
 
 **Category A — Tool presence and version**
-[verify: docs/README.md §Dependencies]:
+[verify: docs/REFERENCE.md §Dependencies]:
 
 | ID | Tool | Required | Check | Version Gate |
 | --- | --- | --- | --- | --- |
@@ -365,26 +385,42 @@ PreToolUse hook blocks the command.
 | DEP08 | `hadolint` | Optional | `command -v hadolint` | — |
 | DEP09 | `hadolint` version | Optional | `hadolint --version` | ≥ 2.12.0 |
 | DEP10 | `taplo` | Optional | `command -v taplo` | — |
-| DEP11 | `biome` | Required* | `command -v biome \|\| npx biome --version` | — |
+| DEP11 | `biome` | Required* | `detect_biome()` [verify: multi_linter.sh] | — |
 | DEP12 | `semgrep` | Optional | `command -v semgrep` | — |
 | DEP13 | `markdownlint-cli2` | Optional | `command -v markdownlint-cli2` | — |
-| DEP23 | `oxlint` | Optional | `command -v oxlint` | — |
-| DEP24 | `bandit` | Optional | `command -v bandit` | — |
+| DEP23 | `oxlint` | Advisory | `command -v oxlint` (informational) | — |
+| DEP24 | `bandit` | Optional | `uv run bandit --version` | — |
 
 For Required tools: `pass: false` if absent.
 For Required* tools (DEP11): `pass: false` if absent. Biome is
 optional for daily hook operation but required for this test suite
-per D4 — ml-agent tests M15–M18 hard-fail without it.
+per D4 — ml-agent tests M15–M18 hard-fail without it. DEP11 must
+mirror the `detect_biome()` function in `multi_linter.sh`, which
+probes `./node_modules/.bin/biome` first (the most common
+installation path), then falls back to PATH, then to `npx biome`,
+then to `pnpm exec biome`, then to `bunx biome`.
+[verify: .claude/hooks/multi_linter.sh §detect_biome].
+Note: `npx biome` is included in the fallback chain despite the PM
+enforcement hook blocking `npx` commands — the hooks operate in
+different lifecycle phases (PreToolUse vs PostToolUse).
 For Optional tools: `pass: true` with `note: "absent"` if absent
 (absence is expected and graceful).
-DEP23 (oxlint): needed for M26 (`ts_combined_config`) which tests
-biome + oxlint interaction. If absent, M26 is skipped.
+For Advisory tools (DEP23): `pass: true` regardless of presence;
+the note field records presence status for informational purposes.
+DEP23 (oxlint): The hook never invokes oxlint directly — the
+`oxlint_tsgolint` config flag only modifies biome's `--skip` flags
+[verify: .claude/hooks/multi_linter.sh §oxlint_tsgolint]. DEP23
+is advisory-only to document the tool's availability for future
+reference.
 DEP24 (bandit): needed for M31 (`py_multi_tool`) which tests
-multi-tool Phase 2 collection. If absent, M31 is skipped.
+multi-tool Phase 2 collection. If absent, M31 is skipped. DEP24
+uses `uv run bandit --version` because the hook invokes bandit via
+`uv run bandit`, not bare `bandit`
+[verify: .claude/hooks/multi_linter.sh §bandit invocation].
 For DEP09: `pass: false` if hadolint found but version < 2.12.0.
-[verify: docs/README.md §hadolint Version Check]
+[verify: docs/REFERENCE.md §hadolint Version Check]
 
-**`claude` discovery order** [verify: docs/README.md
+**`claude` discovery order** [verify: docs/REFERENCE.md
 §claude Command Discovery]:
 
 1. `claude` in PATH
@@ -393,11 +429,11 @@ For DEP09: `pass: false` if hadolint found but version < 2.12.0.
 4. `/usr/local/bin/claude`
 
 **Category B — Settings registration and config**
-[verify: .claude/settings.json, docs/README.md §Configuration]:
+[verify: .claude/settings.json, docs/REFERENCE.md §Configuration]:
 
 | ID | Check | Expected |
 | --- | --- | --- |
-| DEP14 | `~/.claude/no-hooks-settings.json` exists and contains `"disableAllHooks": true` | exists + content valid |
+| DEP14 | `no-hooks-settings.json` has `disableAllHooks: true` | valid |
 | DEP15 | PreToolUse `Edit\|Write` entry | protect_linter_configs.sh |
 | DEP16 | PreToolUse `Bash` entry | enforce_package_managers.sh |
 | DEP17 | PostToolUse `Edit\|Write` entry | multi_linter.sh |
@@ -406,8 +442,8 @@ For DEP09: `pass: false` if hadolint found but version < 2.12.0.
 | DEP20 | `config.json` has `package_managers.python` | present |
 | DEP21 | `config.json` has `package_managers.javascript` | present |
 
-[verify: .claude/settings.json, docs/README.md §Runtime
-Configuration, docs/README.md §Subprocess Hook Prevention]
+[verify: .claude/settings.json, docs/REFERENCE.md §Runtime
+Configuration, docs/REFERENCE.md §Subprocess Hook Prevention]
 
 **Category C — Test infrastructure**:
 
@@ -419,6 +455,29 @@ Configuration, docs/README.md §Subprocess Hook Prevention]
 enforcement. On macOS, install via `brew install coreutils`.
 If `gtimeout` is found instead of `timeout`, agents should use
 `gtimeout` as a drop-in replacement.
+
+**Category D — Advisory uv-managed tool checks**:
+
+These checks verify that Python tools invoked via `uv run` in
+`multi_linter.sh` are reachable through `uv run`. They are
+advisory-only (`pass: true` regardless) because `uv run` can
+auto-install packages from `pyproject.toml` dependencies. The
+checks provide visibility into whether tools are pre-installed
+(fast) or will require on-demand installation (slow, first-run
+penalty).
+
+| ID | Tool | Check | Note |
+| --- | --- | --- | --- |
+| DEP25 | `ty` | `uv run ty --version` | Type checker |
+| DEP26 | `vulture` | `uv run vulture --version` | Dead code |
+| DEP27 | `flake8-pydantic` | `uv run flake8 --version` | Pydantic lint |
+| DEP28 | `flake8-async` | `uv run flake8 --version` | Async lint |
+| DEP29 | `bandit` (advisory) | `uv run bandit --version` | Security |
+
+DEP29 duplicates DEP24's check but is categorized as advisory
+(always passes) rather than optional (gates M31). Both checks use
+the same `uv run bandit --version` command. DEP24 determines
+whether M31 is skipped; DEP29 provides informational output.
 
 ### D7: Log Format — JSONL
 
@@ -544,13 +603,23 @@ aggregates with `jaq -s '.'` after all agents complete.
 
 ```text
 .claude/tests/hooks/results/
-├── ml-agent-20260220T143022Z.jsonl
-├── pm-agent-20260220T143022Z.jsonl
-└── dep-agent-20260220T143022Z.jsonl
+├── archive/
+│   └── 20260220T143022Z/          ← previous run
+│       ├── dep-agent-20260220T131609Z.jsonl
+│       ├── ml-agent-20260220T133812Z.jsonl
+│       ├── pm-agent-20260220T132332Z.jsonl
+│       └── RESULTS.md
+├── dep-agent-<current-timestamp>.jsonl  ← current run
+├── ml-agent-<current-timestamp>.jsonl
+├── pm-agent-<current-timestamp>.jsonl
+├── RESULTS.md
+└── COMPARISON.md                  ← if archive/ has a previous run
 ```
 
 This directory must be created before agent execution
-(`mkdir -p .claude/tests/hooks/results/`).
+(`mkdir -p .claude/tests/hooks/results/`). Phase 0 archives previous
+run results before starting a new run — the `archive/` subdirectory
+preserves historical runs for comparison (see Phase 4).
 
 **Alternatives considered**:
 
@@ -572,17 +641,23 @@ alongside the hook scripts and configuration they test. The
 1. **Exit code matches**: `actual_exit == expected_exit`
 2. **Decision field matches**: For hooks that return JSON stdout
    (PreToolUse, Stop), `actual_decision == expected_decision`
-   [verify: docs/README.md §Hook Schema Reference]
+   [verify: docs/REFERENCE.md §Hook Schema Reference]
 3. **Prefix present** (for block/violation cases): `actual_output`
    contains the expected `[hook:block]`, `[hook]`,
    `[hook:advisory]`, or `[hook:warning]` prefix as appropriate
-   [verify: docs/README.md §Message Styling]
+   [verify: docs/REFERENCE.md §Message Styling]
 
 A test is **skipped** (not failed) when:
 
 - An optional tool is absent AND the test gates on its presence
   (e.g., yamllint violation test skipped if yamllint absent)
 - Exception: Biome absence is a **failure**, not a skip (per D4)
+
+A test is also **skipped** (not failed) when:
+
+- A required tool IS present but the specific rule/feature tested is
+  unavailable in the installed version (e.g., biome nursery rule absent
+  in biome 2.x). Record: `pass: true, note: "version_skip: <detail>"`.
 
 A test **fails** when:
 
@@ -633,7 +708,7 @@ input/output contract, or an expected output value carries a
 
 Where `<source>` is one of:
 
-- A file and section: `docs/README.md §Dependencies`
+- A file and section: `docs/REFERENCE.md §Dependencies`
 - A script path: `.claude/hooks/multi_linter.sh §phase2`
 - A spec reference: `adr-package-manager-enforcement.md §D12`
 - `[verify: unresolved]` for claims that need investigation
@@ -650,14 +725,14 @@ must return zero matches before acceptance.
 
 ## Complete Test Case Inventory
 
-### ml-agent Test Cases (38 total)
+### ml-agent Test Cases (42 total)
 
 All violation tests use `HOOK_SKIP_SUBPROCESS=1`
-[verify: docs/README.md §Testing Environment Variables].
-All rows verify against [verify: docs/README.md §Linter Behavior
-by File Type]. M01–M02 also use [verify: docs/README.md
+[verify: docs/REFERENCE.md §Testing Environment Variables].
+All rows verify against [verify: docs/REFERENCE.md §Linter Behavior
+by File Type]. M01–M02 also use [verify: docs/REFERENCE.md
 §Testing Hooks Manually]. M19 verifies
-[verify: docs/README.md §Hook Invocation Behavior].
+[verify: docs/REFERENCE.md §Hook Invocation Behavior].
 
 **Config-toggle tests (M20–M22)**: These tests use separate
 `CLAUDE_PROJECT_DIR` overrides (one temp dir per test) to exercise
@@ -695,8 +770,8 @@ implementation) — split from M22 for per-setting attribution.
 | M17 | js_clean | Clean `.js` | exit 0 | biome\* |
 | M18 | css_clean | Clean `.css` | exit 0 | biome\* |
 | M19 | live_trigger | Edit `.py` via tool | hook fires | — |
-| M20 | biome_unsafe_on | Clean `.ts` + `biome_unsafe_autofix: true` | exit 0 | biome\* |
-| M21 | oxlint_skip_rules | Clean `.ts` + `oxlint_tsgolint: true` | exit 0 | biome\* |
+| M20 | biome_unsafe_on | `.ts`, `unsafe_autofix: true` | exit 0 | biome\* |
+| M21 | oxlint_skip_rules | `.ts`, `oxlint_tsgolint: true` | exit 0 | biome\* |
 | M22 | tsgo_safe | Clean `.ts` + `tsgo: true` | exit 0 | biome\* |
 | M23 | knip_safe | Clean `.ts` + `knip: true` | exit 0 | biome\* |
 
@@ -711,20 +786,23 @@ All use `CLAUDE_PROJECT_DIR` overrides for config-dependent tests.
 
 | ID | Name | Fixture | Expected | Gate |
 | --- | --- | --- | --- | --- |
-| M24 | py_multi_violation | Python: F841 + type error | exit 2, multiple violations collected | — |
-| M25 | py_format_stable | Badly-formatted clean Python | exit 0 (Phase 1 formats, Phase 2 clean) | — |
-| M26 | ts_combined_config | TS violation + `unsafe:true` + `oxlint:true` | exit 2 | biome\*, oxlint |
+| M24 | py_multi_violation | Python: F841 + type err | exit 2, multi | — |
+| M25 | py_format_stable | Bad-format Python | exit 0 (P1 fmt, P2 clean) | — |
+| M26 | ts_combined_config | TS + `unsafe`+`oxlint` | exit 2 | biome\* |
 | M27 | py_no_autoformat | Python F841 + `auto_format: false` | exit 2 | — |
-| M28 | ts_nursery_error | TS nursery violation + `nursery: "error"` | exit 2 | biome\* |
-| M29 | py_no_subprocess | Python F841 + `subprocess_delegation: false` | exit 2 | — |
-| M30 | ts_unsafe_resolves | TS violation fixable by `--unsafe` + `unsafe:true` | exit 0 (Phase 1 fixes) | biome\* |
-| M31 | py_multi_tool | Python: `assert True` (B101) + unused var (F841) | exit 2, multi-tool | bandit |
+| M28 | ts_nursery_error | TS nursery + `nursery: "error"` | exit 2 | biome\* |
+| M29 | py_no_subprocess | Python F841 + `subprocess: false` | exit 2 | — |
+| M30 | ts_unsafe_resolves | TS fixable + `unsafe` | exit 0 (P1 fix) | biome\* |
+| M31 | py_multi_tool | Python: B101 + F841 | exit 2, multi-tool | bandit |
 
-M24 verifies [verify: docs/README.md §Python File Flow Detail §Phase 2].
-M25 verifies [verify: docs/README.md §Phase 1 Auto-Format,
+M24 verifies [verify: docs/REFERENCE.md §Python File Flow Detail §Phase 2].
+M25 verifies [verify: docs/REFERENCE.md §Phase 1 Auto-Format,
 §Python File Flow Detail].
 M26 verifies [verify: .claude/hooks/multi_linter.sh §_lint_typescript,
-config interaction].
+config interaction]. Note: M26 does NOT gate on oxlint presence
+because the hook never invokes oxlint directly — the
+`oxlint_tsgolint` flag only modifies biome's `--skip` flags
+[verify: .claude/hooks/multi_linter.sh §oxlint_tsgolint].
 M27 verifies [verify: .claude/hooks/config.json §phases.auto_format].
 M28 verifies [verify: .claude/hooks/multi_linter.sh §nursery_count
 blocking path].
@@ -732,8 +810,40 @@ M29 verifies [verify: .claude/hooks/config.json
 §phases.subprocess_delegation].
 M30 verifies [verify: .claude/hooks/multi_linter.sh §_lint_typescript
 Phase 1 --unsafe path].
-M31 verifies [verify: docs/README.md §Python File Flow Detail
+M31 verifies [verify: docs/REFERENCE.md §Python File Flow Detail
 §Phase 2 bandit + ruff].
+
+**Concrete fixture content for non-obvious tests**:
+
+M25 (`py_format_stable`) — Python with bad formatting but no
+violations. Phase 1 (ruff format) reformats; Phase 2 (ruff check)
+finds nothing:
+
+```python
+# Badly formatted but semantically clean
+def foo(   x,y,   z   ):
+    return x+y+z
+```
+
+M28 (`ts_nursery_error`) — TypeScript triggering a biome nursery
+rule. Requires `biome.json` in the temp `CLAUDE_PROJECT_DIR` with
+nursery rules enabled:
+
+```typescript
+// Triggers nursery rule (e.g., noExcessiveNestedTestSuites)
+describe("a", () => { describe("b", () => { describe("c", () => {
+  describe("d", () => { describe("e", () => { it("deep", () => {
+  }); }); }); }); }); });
+```
+
+M30 (`ts_unsafe_resolves`) — TypeScript with a violation that
+biome's `--unsafe` flag can auto-fix (e.g., removing a type
+assertion that has a safe alternative):
+
+```typescript
+// Fixable by --unsafe: unnecessary type assertion
+const x: string = "hello" as string;
+```
 
 **Cross-language / language toggle tests (M32–M38)**: These tests
 verify that `languages.<type>: false` in `config.json` causes the hook
@@ -746,19 +856,23 @@ file extensions.
 | ID | Name | Fixture | Config Override | Expected | Gate |
 | --- | --- | --- | --- | --- | --- |
 | M32 | lang_py_disabled | Python F841 | `python: false` | exit 0 | — |
-| M33 | lang_ts_disabled | TS unused var | `typescript.enabled: false` | exit 0 | — |
+| M33 | lang_ts_disabled | TS unused | `ts.enabled: false` | exit 0 | — |
 | M34 | lang_shell_disabled | Shell SC2086 | `shell: false` | exit 0 | — |
 | M35 | lang_md_disabled | Markdown MD013 | `markdown: false` | exit 0 | — |
 | M36 | lang_yaml_disabled | YAML indent | `yaml: false` | exit 0 | — |
 | M37 | lang_json_disabled | Invalid JSON | `json: false` | exit 0 | — |
 | M38 | unknown_ext_passthrough | `.xyz` file | Default config | exit 0 | — |
+| M39 | lang_toml_disabled | TOML syntax error | `toml: false` | exit 0 | — |
+| M40 | lang_dockerfile_disabled | Dockerfile `:latest` | `dockerfile: false` | exit 0 | — |
+| M41 | empty_py_file | Empty `.py` (0 bytes) | Default config | exit 2 (D100) | — |
+| M42 | toml_tmp_path_ignored | TOML error at `/tmp/` | Default config | exit 0 | — |
 
 M32–M37 verify [verify: .claude/hooks/multi_linter.sh §language toggle
 check, .claude/hooks/config.json §languages].
 M38 verifies [verify: .claude/hooks/multi_linter.sh §file extension
 routing fallback].
 
-### pm-agent Test Cases (28 total)
+### pm-agent Test Cases (32 total)
 
 ADR-PM = `docs/specs/adr-package-manager-enforcement.md`
 
@@ -768,7 +882,7 @@ Compound cases verify [verify: ADR-PM §D7, §Note on independent
 blocks for poetry/pipenv]. Config mode cases verify
 [verify: ADR-PM §D9, §D2]. P18 verifies
 [verify: .claude/hooks/enforce_package_managers.sh §exit].
-P28 verifies [verify: docs/README.md §Hook Invocation Behavior].
+P28 verifies [verify: docs/REFERENCE.md §Hook Invocation Behavior].
 
 | ID | Name | Command | Expected |
 | --- | --- | --- | --- |
@@ -800,16 +914,22 @@ P28 verifies [verify: docs/README.md §Hook Invocation Behavior].
 | P26 | cfg_py_warn | `pip install` + `"uv:warn"` | approve, `[hook:advisory]` |
 | P27 | cfg_js_off | `npm install` + `js: false` | approve |
 | P28 | live_trigger | `Bash pip install` via tool | hook blocks |
+| P29 | semicolon_compound | `ls ; pip install flask` | block |
+| P30 | python3_m_pip | `python3 -m pip install pkg` | block |
+| P31 | pnpm_audit_allowed | `pnpm audit` | approve |
+| P32 | pipe_compound | `echo foo \| pip install -r /dev/stdin` | block |
 
-### dep-agent Test Cases (24 total)
+### dep-agent Test Cases (29 total)
 
-README = `docs/README.md`
+README = `docs/REFERENCE.md`
 
 Required-tool checks (DEP01–DEP04) verify
 [verify: README §Dependencies, README §claude Command Discovery].
-Optional-tool checks (DEP05–DEP13, DEP23–DEP24) verify
+Optional-tool checks (DEP05–DEP13, DEP24) verify
 [verify: README §Dependencies]. DEP09 additionally checks the
 minimum version [verify: README §hadolint Version Check].
+Advisory-tool checks (DEP23, DEP25–DEP29) always pass; they
+provide informational output about tool availability.
 DEP14 verifies the no-hooks settings file
 [verify: README §Subprocess Hook Prevention]. Settings keys
 (DEP15–DEP18) verify [verify: .claude/settings.json].
@@ -829,10 +949,10 @@ README §Package Manager Enforcement].
 | DEP08 | hadolint_opt | `command -v hadolint` | yes/no |
 | DEP09 | hadolint_ver | `hadolint --version` | ≥ 2.12.0 |
 | DEP10 | taplo_opt | `command -v taplo` | yes/no |
-| DEP11 | biome_opt | `command -v biome \|\| npx biome --version` | yes/no |
+| DEP11 | biome_opt | `detect_biome()` chain | yes/no |
 | DEP12 | semgrep_opt | `command -v semgrep` | yes/no |
 | DEP13 | mdlint_opt | `command -v markdownlint-cli2` | yes/no |
-| DEP14 | no_hooks | `no-hooks-settings.json` | exists + `disableAllHooks: true` |
+| DEP14 | no_hooks | `no-hooks-settings.json` | exists + `disableAllHooks` |
 | DEP15 | set_pre_edit | `settings.json` | `Edit\|Write` |
 | DEP16 | set_pre_bash | `settings.json` | `Bash` |
 | DEP17 | set_post | `settings.json` | `PostToolUse` |
@@ -841,8 +961,13 @@ README §Package Manager Enforcement].
 | DEP20 | cfg_py_key | `config.json` | `pkg_mgrs.python` |
 | DEP21 | cfg_js_key | `config.json` | `pkg_mgrs.js` |
 | DEP22 | timeout_present | `command -v timeout` | present |
-| DEP23 | oxlint_opt | `command -v oxlint` | yes/no |
-| DEP24 | bandit_opt | `command -v bandit` | yes/no |
+| DEP23 | oxlint_advisory | `oxlint \|\| node_modules/.bin/oxlint` | advisory |
+| DEP24 | bandit_opt | `uv run bandit --version` | yes/no |
+| DEP25 | ty_advisory | `uv run ty --version` | advisory |
+| DEP26 | vulture_advisory | `uv run vulture --version` | advisory |
+| DEP27 | flake8_pydantic_advisory | `uv run flake8 --version` | advisory |
+| DEP28 | flake8_async_advisory | `uv run flake8 --version` | advisory |
+| DEP29 | bandit_advisory | `uv run bandit --version` | advisory |
 
 ## Main Agent Aggregation Logic
 
@@ -852,9 +977,9 @@ After all three agents write their JSONL logs, the main agent:
    (`test -s <file>`). If any file is missing or empty, report
    which agent failed and treat its tests as unknown failures.
 1. Verifies record counts per agent:
-   - ml-agent: 38 records expected
-   - pm-agent: 28 records expected
-   - dep-agent: 24 records expected
+   - ml-agent: 42 records expected
+   - pm-agent: 32 records expected
+   - dep-agent: 29 records expected
    If a file has fewer records than expected, report which agent
    produced a partial run and treat missing tests as unknown
    failures (the file is still included in aggregation).
@@ -894,14 +1019,32 @@ hung test from blocking the entire suite.
 
 | Layer | Timeout | Rationale |
 | --- | --- | --- |
-| Layer 1 (stdin/stdout) | 30s | Hooks run Phase 1+2 without subprocess; 30s is generous |
-| Layer 2 (M19 live Edit) | 120s | PostToolUse may spawn subprocess (~25-30s typical) |
+| Layer 1 (stdin/stdout) | 30s | Phase 1+2 no subprocess; 30s generous |
+| Layer 2 (M19 live Edit) | 120s | PostToolUse spawns subprocess (~25-30s) |
 | Layer 2 (P28 live Bash) | 30s | PreToolUse blocks immediately, no subprocess |
-| Suite-level backstop | 15 min | 90 tests × worst case; prevents runaway orchestration |
+| Suite-level backstop | 15 min | 103 tests × worst case; prevents runaway |
 
-**Timeout mechanism**: Layer 1 tests use `timeout 30 bash
+**Timeout mechanism**: Layer 1 tests use `${TIMEOUT_CMD} 30 bash
 .claude/hooks/hook.sh`. Layer 2 timeouts are enforced by the
 orchestrator's task management.
+
+**Timeout command detection**: On macOS, GNU `timeout` is installed
+as `gtimeout` via `brew install coreutils`. Each agent must detect
+the available command at startup:
+
+```bash
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=gtimeout
+else
+  echo "FATAL: neither timeout nor gtimeout found" >&2
+  exit 1
+fi
+```
+
+All subsequent timeout invocations use `${TIMEOUT_CMD}` instead of
+bare `timeout`. DEP22 validates this requirement at pre-flight.
 
 **Timeout behavior**: On timeout, mark the test as
 `pass: false, note: "TIMEOUT_30s"` (or `TIMEOUT_120s`) and
@@ -916,7 +1059,7 @@ partial results.
 | jaq absent | Low | High | DEP01 detects this first |
 | hadolint version < 2.12.0 | Low | Med | DEP09 version check |
 | config.json missing | Low | Med | DEP19 checks existence |
-| HOOK_SKIP_SUBPROCESS not honored | Low | Med | Self-mitigating: all violation tests use this variable and expect exit 2 — if unhonored, every violation test fails [verify: docs/README.md §Testing Environment Variables] |
+| HOOK_SKIP_SUBPROCESS ignored | Low | Med | Fails all violation tests |
 | TeamCreate session orphaned | Low | Low | D10 keep-on-failure policy |
 | JSONL write race condition | Very Low | Low | One file per agent |
 
@@ -924,9 +1067,9 @@ partial results.
 
 **In scope**:
 
-- `multi_linter.sh` functional testing (all file types, config interactions, language toggles, M01–M38)
-- `enforce_package_managers.sh` functional testing (P01–P28)
-- Dependency presence and version auditing (DEP01–DEP24)
+- `multi_linter.sh` testing (file types, config, toggles, M01–M42)
+- `enforce_package_managers.sh` functional testing (P01–P32)
+- Dependency presence and version auditing (DEP01–DEP29)
 - Settings.json registration verification
 - JSONL log production and main agent aggregation
 
@@ -946,14 +1089,14 @@ to test:
 
 | Setting | Config Path | Implemented? | Tested? |
 | --- | --- | --- | --- |
-| `biome_unsafe_autofix` | `languages.typescript.biome_unsafe_autofix` | **Yes** (2 branch points) | M20 |
-| `oxlint_tsgolint` | `languages.typescript.oxlint_tsgolint` | **Partial** (Biome --skip only) | M21 |
+| `biome_unsafe_autofix` | `lang.ts.biome_unsafe_autofix` | **Yes** (2) | M20 |
+| `oxlint_tsgolint` | `lang.ts.oxlint_tsgolint` | **Partial** (--skip) | M21 |
 | `tsgo` | `languages.typescript.tsgo` | **No** (deferred) | M22 (smoke) |
 | `knip` | `languages.typescript.knip` | **No** (deferred) | M23 (smoke) |
 | `jscpd.advisory_only` | `jscpd.advisory_only` | **Dead config** | — |
 
 **Dead config finding**: `jscpd.advisory_only` is documented in
-`docs/README.md` (line 890) as configurable, but `multi_linter.sh`
+`docs/REFERENCE.md` (line 890) as configurable, but `multi_linter.sh`
 never reads this value. The jscpd advisory behavior is hardcoded —
 both the Python path and the TypeScript path emit
 `[hook:advisory]` messages without checking the config flag. Changing
@@ -964,16 +1107,19 @@ into the code or removed from the config to avoid confusion.
 
 ### Positive
 
-- Structured proof that all hooks work end-to-end (90 test cases)
+- Structured proof that all hooks work end-to-end (103 test cases)
 - Machine-readable JSONL audit trail enables future CI integration
 - Dependency health monitoring catches silent degradation
 - Parallel execution via TeamCreate keeps total runtime manageable
 - Verification markers provide traceability between spec and
   implementation
+- Post-review expansion from 95 to 103 tests added edge cases for
+  TOML/Dockerfile language toggles, empty files, semicolon/pipe
+  compound commands, and `python3 -m pip` variant
 
 ### Negative
 
-- Maintenance burden: 90 test cases must be updated when hook
+- Maintenance burden: 103 test cases must be updated when hook
   behavior changes (mitigated by `[verify:]` markers that flag
   which tests depend on which contracts)
 - TeamCreate dependency: test suite requires experimental agent
@@ -987,23 +1133,26 @@ into the code or removed from the config to avoid confusion.
   are complementary (harness logic vs. integration behavior)
 - JSONL logs accumulate in `.claude/tests/hooks/results/` and
   require periodic cleanup
+- Companion execution results document
+  ([RESULTS.md](../../.claude/tests/hooks/results/RESULTS.md)) captures
+  findings and deviations from the initial run
 
 ## Implementation Checklist
 
-- [ ] Create `.claude/tests/hooks/results/` directory
-- [ ] Implement ml-agent (test cases M01–M19)
-- [ ] Implement pm-agent (test cases P01–P28)
-- [ ] Implement dep-agent (test cases DEP01–DEP24)
-- [ ] Implement main agent aggregation and teardown logic
-- [ ] Implement config-toggle tests M20–M23 (separate CLAUDE_PROJECT_DIR per test)
-- [ ] Implement conflict/interaction tests M24–M31 (multi-linter, phase toggles, config combos)
-- [ ] Implement cross-language toggle tests M32–M38 (language disable + unknown extension)
-- [ ] Resolve all `[verify: unresolved]` markers before Accepted
-- [ ] Confirm all 90 test cases produce JSONL records (including
+- [x] Create `.claude/tests/hooks/results/` directory
+- [x] Implement ml-agent (test cases M01–M19)
+- [x] Implement pm-agent (test cases P01–P28)
+- [x] Implement dep-agent (test cases DEP01–DEP29)
+- [x] Implement main agent aggregation and teardown logic
+- [x] Implement config-toggle tests M20–M23 (separate CLAUDE_PROJECT_DIR per test)
+- [x] Implement conflict tests M24–M31 (multi-linter, config)
+- [x] Implement language toggle tests M32–M38 (disable + unknown ext)
+- [x] Resolve all `[verify: unresolved]` markers before Accepted
+- [x] Confirm all 103 test cases produce JSONL records (including
   live trigger tests with `category: "live_trigger"`, config-toggle
-  tests M20–M23, conflict tests M24–M31, and cross-language tests
-  M32–M38)
-- [ ] Confirm teardown/keep behavior per D10
+  tests M20–M23, conflict tests M24–M31, cross-language tests
+  M32–M38, and edge case tests M39–M42, P29–P32)
+- [x] Confirm teardown/keep behavior per D10
 
 ## Acceptance Gates
 
@@ -1012,7 +1161,7 @@ following conditions are met:
 
 1. All `[verify: unresolved]` markers are resolved
    (`grep '\[verify: unresolved\]'` returns zero matches)
-2. All 90 test cases produce valid JSONL records
+2. All 103 test cases produce valid JSONL records
 3. The aggregation command runs without errors on the produced JSONL
 4. The dep-agent pre-flight passes (DEP01–DEP04 all present)
 5. The Implementation Checklist above is fully checked off
@@ -1037,6 +1186,17 @@ that creates the team, assigns tasks, and aggregates results.
 ### Phase 0: Setup
 
 ```bash
+# Archive previous run results (if any)
+if ls .claude/tests/hooks/results/*.jsonl 1>/dev/null 2>&1; then
+  _archive=".claude/tests/hooks/results/archive/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "${_archive}"
+  mv .claude/tests/hooks/results/*.jsonl "${_archive}/"
+  [ -f .claude/tests/hooks/results/RESULTS.md ] && \
+    mv .claude/tests/hooks/results/RESULTS.md "${_archive}/RESULTS.md"
+  [ -f .claude/tests/hooks/results/COMPARISON.md ] && \
+    rm .claude/tests/hooks/results/COMPARISON.md
+fi
+
 mkdir -p .claude/tests/hooks/results/
 echo '*.jsonl' > .claude/tests/hooks/results/.gitignore
 ```
@@ -1048,9 +1208,9 @@ coverage:
 
 ```bash
 # Required* — biome (M15–M18, M26, M28, M30)
-command -v biome || bun add --dev @biomejs/biome
+test -x ./node_modules/.bin/biome || command -v biome || bun add --dev @biomejs/biome
 
-# Optional — oxlint (M26 ts_combined_config)
+# Advisory — oxlint (hook uses oxlint_tsgolint flag to modify biome --skip only)
 command -v oxlint || bun add --dev oxlint
 
 # Optional — bandit (M31 py_multi_tool)
@@ -1060,7 +1220,7 @@ command -v bandit || uv pip install bandit
 command -v timeout || command -v gtimeout || brew install coreutils
 ```
 
-See dep-agent inventory (DEP01–DEP24) for the full dependency list.
+See dep-agent inventory (DEP01–DEP29) for the full dependency list.
 If any Required tool is missing, dep-agent will abort the run.
 If an Optional tool is missing, tests that gate on it are skipped
 with `pass: true, note: "absent"`.
@@ -1076,12 +1236,12 @@ Create the team via TeamCreate:
 
 Spawn `dep-agent` as a TeamCreate teammate (subagent_type:
 `general-purpose`). Assign it the dep-agent test inventory
-(DEP01–DEP24).
+(DEP01–DEP29).
 
 **dep-agent prompt template**:
 
 > Run the dep-agent test inventory from the hook integration testing
-> ADR (DEP01–DEP24). For each test, write one JSONL record to
+> ADR (DEP01–DEP29). For each test, write one JSONL record to
 > `.claude/tests/hooks/results/dep-agent-<timestamp>.jsonl` using
 > `jaq -n` (see JSONL write pattern below). After all tests
 > complete, send a message to the orchestrator with the count of
@@ -1105,7 +1265,7 @@ Spawn both agents as TeamCreate teammates (subagent_type:
 **ml-agent prompt template**:
 
 > Run the ml-agent test inventory from the hook integration testing
-> ADR (M01–M38). For each test: create a temp fixture, invoke the
+> ADR (M01–M42). For each test: create a temp fixture, invoke the
 > hook via stdin pipe, capture exit code and output, write one JSONL
 > record to `.claude/tests/hooks/results/ml-agent-<timestamp>.jsonl`.
 > Use `HOOK_SKIP_SUBPROCESS=1` for all violation tests. Use
@@ -1118,7 +1278,7 @@ Spawn both agents as TeamCreate teammates (subagent_type:
 **pm-agent prompt template**:
 
 > Run the pm-agent test inventory from the hook integration testing
-> ADR (P01–P28). For each test: construct the JSON payload, pipe
+> ADR (P01–P32). For each test: construct the JSON payload, pipe
 > to enforce_package_managers.sh, capture exit code and stdout/stderr,
 > write one JSONL record to
 > `.claude/tests/hooks/results/pm-agent-<timestamp>.jsonl`. Use
@@ -1233,11 +1393,87 @@ inventory and sends a results message, it goes idle. The
 orchestrator receives the message and can check TaskList for
 remaining work.
 
+### Phase 4: Run Comparison (conditional)
+
+This phase only executes when `archive/` contains a previous run.
+If this is the first run, skip to teardown.
+
+**Step 1 — Identify the most recent archived run**:
+
+```bash
+prev_run=$(ls -1d .claude/tests/hooks/results/archive/*/ 2>/dev/null \
+  | sort -r | head -1)
+if [ -z "${prev_run}" ]; then
+  echo "No previous run found — skipping comparison."
+  # Skip to teardown
+fi
+```
+
+**Step 2 — Automated JSONL diff**:
+
+Join current and previous JSONL records by `test_name` and report
+field-level deltas across all three agents (dep-agent, ml-agent,
+pm-agent):
+
+```bash
+jaq -s --slurpfile prev <(cat "${prev_run}"/*.jsonl) '
+  . as $curr |
+  ($prev | map({(.test_name): .}) | add) as $prev_map |
+  ($curr | map({(.test_name): .}) | add) as $curr_map |
+  {
+    added: [$curr | .[] | select(.test_name as $t | $prev_map[$t] == null) | .test_name],
+    removed: [$prev | .[] | select(.test_name as $t | $curr_map[$t] == null) | .test_name],
+    changed: [
+      $curr | .[] |
+      select(.test_name as $t | $prev_map[$t] != null) |
+      . as $c | $prev_map[.test_name] as $p |
+      select($c.pass != $p.pass or $c.actual_exit != $p.actual_exit or $c.note != $p.note) |
+      {
+        test_name,
+        pass: {old: $p.pass, new: $c.pass},
+        actual_exit: {old: $p.actual_exit, new: $c.actual_exit},
+        note: {old: $p.note, new: $c.note}
+      }
+    ]
+  }
+' .claude/tests/hooks/results/*.jsonl
+```
+
+**Step 3 — Environment snapshot comparison**:
+
+If both runs have `RESULTS.md`, the orchestrator extracts the
+Environment Snapshot tables and reports tool version changes
+(e.g., `biome: 2.3.15 → 2.4.0`). dep-agent records provide the
+structured data for this comparison — tool presence/version changes
+in dep-agent explain exit code changes in ml-agent and pm-agent.
+
+**Step 4 — Write COMPARISON.md**:
+
+Write `.claude/tests/hooks/results/COMPARISON.md` with:
+
+- **Run identifiers**: Timestamps of both runs
+- **Environment delta**: Tool version/presence changes from
+  dep-agent record comparison
+- **Test result delta table**: test_name, old result, new result,
+  delta type (added/removed/regression/resolved/changed)
+- **Actionable items**: Regressions to investigate, resolved issues
+  to confirm, environment drift to document
+
+`COMPARISON.md` compares only the last two runs (current vs. most
+recent archive). It is overwritten on each run, not accumulated.
+
+---
+
+## Execution Results
+
+For findings, deviations, and remediation details from the first clean
+run, see [RESULTS.md](../../.claude/tests/hooks/results/RESULTS.md).
+
 ---
 
 ## References
 
-- [docs/README.md](../README.md) — Hook architecture and
+- [docs/REFERENCE.md](../README.md) — Hook architecture and
   testing documentation
 - [.claude/hooks/multi_linter.sh](../../.claude/hooks/multi_linter.sh)
   — PostToolUse hook implementation

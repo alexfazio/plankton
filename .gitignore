@@ -49,3 +49,17 @@ coverage/
 .claude/plans/
 .claude/todos/
 .claude/settings.local.json
+
+# Publication hygiene — internal / private files
+docs/internal/
+docs/specs/linear-issue-hook-messages.md
+docs/specs/stress-test-report.md
+PLAN.md
+CLAUDE.md
+!/CLAUDE.md
+package-lock.json
+.claude/tests/hooks/results/.start_ts
+.claude/tests/hooks/results/archive/
+*.zip
+docs/**/*.zip
+.claude/**/*.zip

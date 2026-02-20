@@ -12,6 +12,8 @@
   - Defense-in-depth config protection
     (PreToolUse block + Stop hook recovery)
   - Complexity-based model selection (haiku/sonnet/opus) for subprocess delegation
+- **Package manager enforcement**: Blocks legacy package managers
+  (pip, npm, yarn) and suggests project-preferred alternatives (uv, bun)
 - **Languages**: Python, Shell, YAML, JSON, TOML, Markdown, Dockerfile, TypeScript/JS/CSS
 - **Dependencies**: `jaq` + `ruff` required; 20+ optional
   linters skipped if absent
@@ -37,6 +39,9 @@
   blocks edits; Stop hook detects via `git diff`)
 - **Model routing**: Violation complexity drives
   haiku/sonnet/opus selection
+- **Package manager enforcement**: PreToolUse hook
+  blocks legacy PMs (pip/npm/yarn) and suggests
+  project-preferred alternatives (uv/bun)
 - **Dual enforcement**: CC hooks (real-time) +
   pre-commit (commit-time) share linter configs
 - **Graceful degradation**: Optional tools skipped
@@ -53,6 +58,7 @@
 ```mermaid
 graph TB
     CC[Claude Code Runtime<br/>Hook Lifecycle] --> PH[PreToolUse<br/>protect_linter_configs.sh]
+    CC --> PMH[PreToolUse<br/>enforce_package_managers.sh]
     CC --> MH[PostToolUse<br/>multi_linter.sh]
     CC --> SH[Stop<br/>stop_config_guardian.sh]
 
@@ -67,11 +73,13 @@ graph TB
 
     CFG[config.json<br/>Runtime Config] --> MH
     CFG --> PH
+    CFG --> PMH
     CFG --> SH
 
     style CC fill:#e3f2fd
     style MH fill:#e3f2fd
     style PH fill:#f3e5f5
+    style PMH fill:#f3e5f5
     style SH fill:#f3e5f5
     style SP fill:#fff3e0
     style LT fill:#d9ead3
@@ -109,6 +117,7 @@ graph TD
 graph TB
     subgraph "Hook Layer"
         PRE[protect_linter_configs.sh<br/>PreToolUse: Block Config Edits]
+        PM[enforce_package_managers.sh<br/>PreToolUse: Block Legacy PMs]
         POST[multi_linter.sh<br/>PostToolUse: Three-Phase Lint]
         STOP[stop_config_guardian.sh<br/>Stop: Git-Based Recovery]
         APPROVE[approve_configs.sh<br/>Helper: Guard File Creator]
@@ -133,9 +142,11 @@ graph TB
     end
 
     SETTINGS --> PRE
+    SETTINGS --> PM
     SETTINGS --> POST
     SETTINGS --> STOP
     CONFIG --> POST
+    CONFIG --> PM
     POST --> RUFF
     POST --> SC
     POST --> BIOME
@@ -194,22 +205,41 @@ graph TB
 
 ### config.json (Runtime Configuration)
 
-- **Location**: `.claude/hooks/config.json` (~68 lines)
+- **Location**: `.claude/hooks/config.json` (~80 lines)
 - **Responsibilities**: Central config for all hooks -
   language toggles, protected files, exclusions,
-  phase control, model patterns, jscpd settings
+  phase control, model patterns, jscpd settings,
+  package manager enforcement
 - **Implementation**: Loaded by `load_config()`;
   parsed with `jaq`. Falls back to defaults if missing
 - **TypeScript sub-options**: `biome_unsafe_autofix`
   (unsafe Biome fixes), `oxlint_tsgolint` (oxlint
   integration), `tsgo` (TypeScript Go compiler),
   `knip` (dead code detection) - all opt-in
+- **Package manager section**: `package_managers.python`
+  (uv/uv:warn/false), `package_managers.javascript`
+  (bun/bun:warn/false), `allowed_subcommands` per tool
 - **Notes**: Env vars (`HOOK_SUBPROCESS_TIMEOUT`,
   `HOOK_SKIP_SUBPROCESS`) override config values
 
+### enforce_package_managers.sh (PreToolUse Hook)
+
+- **Location**: `.claude/hooks/enforce_package_managers.sh` (~485 lines)
+- **Responsibilities**: Intercepts legacy package manager
+  commands in Bash tool and blocks or warns, suggesting
+  project-preferred alternatives (uv for Python, bun for JS)
+- **Implementation**: Reads `config.json` `package_managers`
+  section for enforcement mode (block/warn/off) and allowed
+  subcommands. Extracts command from stdin JSON, matches
+  against legacy PM patterns (pip, npm, yarn, pnpm, poetry,
+  pipenv). Returns block with replacement suggestion or approve
+- **Notes**: `HOOK_SKIP_PM=1` bypasses all enforcement;
+  `HOOK_DEBUG_PM=1` logs matching decisions; `HOOK_LOG_PM=1`
+  logs to `/tmp/.pm_enforcement_<pid>.log`
+
 ### test_hook.sh (Debug/Test Utility)
 
-- **Location**: `.claude/hooks/test_hook.sh` (~700 lines)
+- **Location**: `.claude/hooks/test_hook.sh` (~1,106 lines)
 - **Responsibilities**: Self-test suite covering all
   file types, model selection, TS handling, config
   protection, and edge cases
@@ -243,7 +273,7 @@ graph TB
 - **CI/CD**: GitHub Actions runs pre-commit (lint)
   - pytest (test) on push/PR to main
 - **Package management**: `uv` for Python;
-  `npm` for Node tools (biome, jscpd, markdownlint)
+  `bun` for Node tools (biome, oxlint, markdownlint)
 
 ## Security & Privacy
 
@@ -293,6 +323,10 @@ graph TB
 - **Automated tests**: `test_hook.sh --self-test`
   covers ~25 cases: file detection, model selection,
   config protection, TS handling, fallback behavior
+- **Integration test suite**: 103 tests across 3
+  parallel agents (dep-agent 29, ml-agent 42,
+  pm-agent 32) via TeamCreate; results in
+  `.claude/tests/hooks/results/`
 - **Pre-commit**: 15-hook pipeline mirrors CC hook
   phases; runs `uv run pre-commit run --all-files`
 - **CI**: GitHub Actions runs pre-commit (lint) + pytest (test) on push/PR to main
@@ -339,26 +373,38 @@ graph TB
   subprocess (up to 300s) blocks main agent
 - **Session state in /tmp**: PPID-scoped files rely
   on process hierarchy; restarts cause stale markers
-- **TS disabled by default**: `typescript.enabled:
-  false`; users must opt-in and install Biome
+- **TS enabled in project config**: `typescript.enabled:
+  true`; requires Biome installed via bun/npm
 - **No Windows support**: Bash-based hooks require Unix-like environment
 - **macOS `timeout`**: Requires `brew install
   coreutils`; falls back to no timeout if absent
 
 ## Supporting Files
 
+- **`docs/REFERENCE.md`**: Detailed hook system documentation
+  with architecture diagrams, message flow, configuration
+  reference, and testing guides
 - **`scripts/init-typescript.sh`**: Initializes
   TypeScript support (installs Biome, creates configs)
 - **`tests/stress/run_stress_tests.sh`**: Stress test
   suite for hook performance under load
+- **`.claude/tests/hooks/`**: Integration test suite
+  infrastructure (103 tests across 3 agents, JSONL results)
 - **`docs/specs/adr-*.md`**: Architecture Decision Records
-  (hook schema, package manager, CLI tool prefs, TS expansion)
+  (hook schema, package manager enforcement, CLI tool
+  prefs, TS expansion, hook integration testing)
 - **`docs/specs/stress-test-report.md`**: Results from hook
   stress testing
 - **`docs/specs/portable-hooks-template.md`**: Template
   adoption guide
 - **`docs/specs/linear-issue-hook-messages.md`**: Hook
   message formatting spec for Linear issue integration
+- **`docs/internal/elevator-pitch.md`**: Project elevator
+  pitch and positioning
+- **`docs/internal/linting-hooks.md`**: Internal hook
+  system reference
+- **`docs/internal/slop-guard-mascot-research.md`**: Mascot
+  design research
 
 ## Glossary
 

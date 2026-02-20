@@ -7,7 +7,7 @@ in Claude Code. Provides automated linting, formatting, and code quality
 checks that run in real time during Claude Code sessions.
 
 > [!CAUTION]
-> **Plankton is a research project. If your name is not Alex Fazio then do not use.**
+> **Plankton is an experimental research project — not production-ready.**
 >
 > This software is experimental, unstable, and under active development. APIs will change without notice. Features may be incomplete or broken. Claude Code CLI updates and underlying model changes may break hooks at any time. Hooks spawn subprocesses that consume significantly more tokens than a standard Claude Code session — disable subprocess delegation in `config.json` if needed. There is no support, no documentation guarantees, and no warranty of any kind. Use at your own risk.
 
@@ -47,7 +47,7 @@ checks that run in real time during Claude Code sessions.
 | `approve_configs.sh` | Helper | Creates guard file for stop hook |
 | `test_hook.sh` | Debug | Self-test suite for hook validation |
 | `config.json` | Config | Runtime configuration for all hooks |
-| `README.md` | Docs | Detailed hook documentation (at `docs/README.md`) |
+| `REFERENCE.md` | Docs | Detailed hook reference (at `docs/REFERENCE.md`) |
 
 ### Linter Configurations
 
