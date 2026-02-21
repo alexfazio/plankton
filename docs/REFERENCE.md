@@ -149,7 +149,7 @@ Edit/Write on *.py
 ### TypeScript/JS/CSS File Flow Detail
 
 ```text
-Edit/Write on *.ts/*.tsx/*.js/*.jsx/*.css
+Edit/Write on *.ts/*.tsx/*.js/*.jsx/*.mjs/*.cjs/*.mts/*.cts/*.css
        |
        v
 +--------------------------------------------------------------+
@@ -263,7 +263,7 @@ VIOLATIONS:
     "column": 1,
     "code": "PYD002",
     "message": "Field default should use Field() with default parameter",
-    "linter": "pydantic"
+    "linter": "flake8-pydantic"
   }
 ]
 
@@ -413,9 +413,15 @@ The hook (bash script) sees:
 | 0 | No issues, or subprocess fixed all | Nothing |
 | 2 | Violations remain after delegation | `[hook] N remain` |
 
-**Key behavior**: The hook delegates to subprocess first. Exit 2 only occurs if
-violations **remain after** the subprocess attempts fixes. All output goes to
-stderr.
+**Key behavior**: The hook delegates to subprocess first. Exit 2 only
+occurs if violations **remain after** the subprocess attempts fixes.
+All output goes to stderr.
+
+> **Known behavior (CC v2.1.50)**: Exit 2 stderr does NOT appear in
+> the `tool_result` field. However, mitmproxy evidence confirms it IS
+> delivered as a `<system-reminder>` text block in the same API message.
+> The model can read this content but may not reliably act on it.
+> See `docs/specs/posttooluse-issue/make-plankton-work.md` for status.
 
 **Note on Exit 2 rarity**: In practice, exit 2 is rare because the subprocess
 is highly effective. It has full Edit tool access and will aggressively fix
@@ -605,11 +611,11 @@ MAIN AGENT                          HOOK                              SUBPROCESS
 | Type | Phase 1: Auto-Format | Phase 2: Collect Violations |
 | --- | --- | --- |
 | Python | `ruff format` + `--fix` | Ruff+ty+pydantic+vulture+bandit+async*** |
-| Shell | `shfmt -w` | ShellCheck semantic |
+| Shell (.sh/.bash) | `shfmt -w` | ShellCheck semantic |
 | TS/JS/CSS | `biome check --write` | Biome lint+nursery+Semgrep+jscpd** |
 | JSON | `jaq '.'` or `biome format`* | Syntax errors |
 | TOML | `taplo fmt` | Syntax errors |
-| Markdown | `markdownlint --no-globs --fix` | Unfixable rules |
+| Markdown (.md/.mdx) | `markdownlint --no-globs --fix` | Unfixable rules |
 | YAML | (none) | All yamllint issues |
 | Dockerfile | (none) | All hadolint issues |
 
@@ -723,47 +729,10 @@ claude --debug "hooks" --verbose
 
 ### Self-Test Suite
 
-The `--self-test` flag runs automated tests covering:
+The `--self-test` flag runs automated tests covering multi-linter behavior,
+package manager enforcement, model selection, and TypeScript integration.
 
-**Dockerfile patterns**:
-
-- `*.dockerfile` extension (valid content, expect pass)
-- `*.dockerfile` extension (missing labels, expect fail)
-
-**Other file types**:
-
-- Python, Shell, JSON (valid), JSON (invalid), YAML
-
-**Styled output format tests**:
-
-- JSON violations output (`JSON_SYNTAX` code present)
-- Dockerfile violations captured (`DL[0-9]+` codes present)
-
-**Model selection tests**:
-
-- Simple violation (F841) -> haiku
-- Complexity violation (C901) -> sonnet
-- Many violations (>5) -> opus
-- Docstring violation (D103) -> sonnet
-
-**TypeScript tests** (gated on Biome availability):
-
-- Clean TS file -> exit 0
-- TS unused variable -> exit 2
-- JS clean file -> exit 0
-- JSX a11y violation -> exit 2
-- TS disabled -> exit 0 (skip)
-- CSS clean -> exit 0
-- CSS violation -> exit 2
-- TS violations output contains `biome`
-- Protected biome.json -> block
-- TS simple -> haiku model
-- TS >5 violations -> opus model
-- JSON via Biome (D6) -> exit 0
-- Biome not installed -> exit 0 (fallback)
-
-Tests use temp files for content creation and `CLAUDE_PROJECT_DIR` override
-for TypeScript-enabled config isolation.
+See [Testing Guide](tests/README.md#self-test-suite) for the full test catalog.
 
 ### Log location
 
@@ -773,59 +742,45 @@ for TypeScript-enabled config isolation.
 
 ## Testing Hooks Manually
 
-### Test PostToolUse hook (multi_linter.sh)
-
-```bash
-# Test Python handler (should exit 0 for clean file)
-echo 'def foo(): pass' > /tmp/test.py
-echo '{"tool_input": {"file_path": "/tmp/test.py"}}' \
-  | bash .claude/hooks/multi_linter.sh
-echo "Exit: $?"
-
-# Test with violations - use HOOK_SKIP_SUBPROCESS for deterministic exit codes
-# Without it, subprocess would attempt fixes and exit code depends on success
-cat > /tmp/complex.py << 'EOF'
-def f(a,b,c,d,e,f,g,h,i,j,k):
-    if a: return b
-EOF
-echo '{"tool_input": {"file_path": "/tmp/complex.py"}}' \
-  | HOOK_SKIP_SUBPROCESS=1 bash .claude/hooks/multi_linter.sh
-echo "Exit: $?"  # Exit 2 (violations reported, subprocess skipped)
-```
-
-### Test PreToolUse hook (protect_linter_configs.sh)
-
-```bash
-# Protected linter config (should return decision: block)
-echo '{"tool_input": {"file_path": ".yamllint"}}' \
-  | bash .claude/hooks/protect_linter_configs.sh
-# Expected: {"decision": "block", "reason": "Protected linter config file..."}
-
-# Protected hook script (should return decision: block)
-echo '{"tool_input": {"file_path": ".claude/hooks/multi_linter.sh"}}' \
-  | bash .claude/hooks/protect_linter_configs.sh
-# Expected: {"decision": "block", "reason": "Protected Claude Code config..."}
-
-# Protected settings (should return decision: block)
-echo '{"tool_input": {"file_path": ".claude/settings.json"}}' \
-  | bash .claude/hooks/protect_linter_configs.sh
-# Expected: {"decision": "block", "reason": "Protected Claude Code config..."}
-
-# Normal file (should return decision: approve)
-echo '{"tool_input": {"file_path": "/tmp/normal.py"}}' \
-  | bash .claude/hooks/protect_linter_configs.sh
-# Expected: {"decision": "approve"}
-```
+See [Testing Guide](tests/README.md#testing-hooks-manually) for manual testing
+examples covering PostToolUse, PreToolUse, and Stop hooks.
 
 ## Hook Schema Reference
 
-| Hook Type | Schema | Exit Code |
-| --- | --- | --- |
-| PreToolUse | `{"decision": "approve/block"}` | 0 |
-| PostToolUse | Exit codes only (no JSON) | 0 or 2 |
-| Stop | `{"decision": "approve/block"}` | 0 |
+### CC Specification (Official)
 
-**PostToolUse behavior**: Exit 0 = no issues, Exit 2 = stderr fed to Claude.
+Per [official Claude Code docs](https://code.claude.com/docs/en/hooks)
+(verified against CC v2.1.50):
+
+| Hook Type | Spec Schema | Exit Code |
+| --- | --- | --- |
+| PreToolUse | `hookSpecificOutput.permissionDecision` (allow/deny/ask) | 0 |
+| PostToolUse | `{"decision": "block", "reason": "..."}` | 0 or 2 |
+| Stop | `{"decision": "block", "reason": "..."}` | 0 |
+
+**PreToolUse** uses `hookSpecificOutput` with `permissionDecision`
+(allow/deny/ask) and `permissionDecisionReason`. The older top-level
+`decision`/`reason` fields are deprecated for PreToolUse.
+
+### What This Project's Hooks Actually Output
+
+| Hook | Actual Output | Format |
+| --- | --- | --- |
+| `protect_linter_configs.sh` | `{"decision": "block/approve"}` | Legacy* |
+| `enforce_package_managers.sh` | `{"decision": "block/approve"}` | Legacy* |
+| `multi_linter.sh` | stderr + exit code | Exit 0/2 |
+| `stop_config_guardian.sh` | `{"decision": "block/approve"}` | Matches spec |
+
+**\*Legacy**: The PreToolUse hooks use the older `{"decision": "block"}`
+format rather than the newer `hookSpecificOutput.permissionDecision` format.
+Both work in CC v2.1.50 — the deprecated format is still accepted.
+
+**PostToolUse behavior**: Exit 0 = no issues. Exit 2 = stderr fed to Claude
+(non-blocking, tool already ran).
+
+> **Known behavior (CC v2.1.50)**: PostToolUse output does not appear
+> in `tool_result` but stderr+exit2 IS delivered via `<system-reminder>`
+> text block. See `docs/specs/posttooluse-issue/` for details.
 
 ## Hook Invocation Behavior
 
@@ -881,10 +836,11 @@ If the file is missing, all features are enabled with sensible defaults.
 | `exclusions` | str[] | tests/,… | Directories excluded from security linters |
 | `phases.auto_format` | bool | true | Phase 1 auto-format |
 | `phases.subprocess_delegation` | bool | true | Phase 3 subprocess delegation |
+| `hook_enabled` | bool | true | Master kill switch (disables all linting) |
 | `subprocess.timeout` | number | 300 | Subprocess timeout (seconds) |
-| `subprocess.model.sonnet` | string | (regex) | Codes routed to Sonnet |
-| `subprocess.model.opus` | string | (regex) | Codes routed to Opus |
-| `subprocess.model.volume` | number | 5 | Count that triggers Opus |
+| `subprocess.model_selection.sonnet_patterns` | string | (regex) | Sonnet |
+| `subprocess.model_selection.opus_patterns` | string | (regex) | Opus route |
+| `subprocess.model_selection.volume_threshold` | number | 5 | Triggers Opus |
 | `jscpd.session_threshold` | number | 3 | Files modified before jscpd runs |
 | `jscpd.scan_dirs` | str[] | ["src/","lib/"] | Dirs to scan for dupes |
 | `jscpd.advisory_only` | bool | true | Report-only mode (no blocking) |
@@ -1344,41 +1300,8 @@ loading, ensuring consistency between actual model selection and debug output
 
 ## Testing Environment Variables
 
-| Variable | Purpose | Used By |
-| --- | --- | --- |
-| `HOOK_SKIP_SUBPROCESS` | Skip delegation, report directly | test_hook.sh |
-| `HOOK_DEBUG_MODEL` | Output model selection | test_hook.sh |
-| `HOOK_SUBPROCESS_TIMEOUT` | Timeout for subprocess (300s) | multi_linter.sh |
-
-Example usage:
-
-```bash
-# Test model selection without spawning subprocess
-echo '{"tool_input": {"file_path": "/tmp/test.py"}}' \
-  | HOOK_SKIP_SUBPROCESS=1 HOOK_DEBUG_MODEL=1 .claude/hooks/multi_linter.sh
-# Output: [hook:model] haiku
-```
-
-### Debug Output Locations
-
-There are **TWO** debug output blocks for model selection:
-
-1. **Inside `spawn_fix_subprocess()`** - Verbose format with counts:
-
-   ```text
-   [hook:model] haiku (count=3, opus_codes=false, sonnet_codes=false)
-   ```
-
-   Only reached during normal execution (when HOOK_SKIP_SUBPROCESS is not set).
-
-2. **Script-level (main flow)** - Simple format:
-
-   ```text
-   [hook:model] haiku
-   ```
-
-   Runs before HOOK_SKIP_SUBPROCESS check, allowing tests to verify model
-   selection without spawning subprocesses.
+See [Testing Guide](tests/README.md#testing-environment-variables) for the
+complete environment variable reference and debug output locations.
 
 ## Linter Configuration Files
 
@@ -1654,33 +1577,8 @@ Run `npx jscpd --config .jscpd.json` for current baseline.
 
 ## Testing Stop Hook
 
-### Test manually (simulates session end)
-
-```bash
-# No modifications - should approve
-echo '{"stop_hook_active": false}' | bash .claude/hooks/stop_config_guardian.sh
-# Expected: {"decision": "approve"}
-
-# With modifications (first invocation) - should block
-echo "# test" >> .yamllint
-echo '{"stop_hook_active": false}' | bash .claude/hooks/stop_config_guardian.sh
-# Expected: {"decision": "block", "reason": "...", "systemMessage": "..."}
-
-# Loop prevention (second invocation) - should approve
-echo '{"stop_hook_active": true}' | bash .claude/hooks/stop_config_guardian.sh
-# Expected: {"decision": "approve"}
-
-# Restore after test
-git checkout -- .yamllint
-```
-
-### Integration test (requires session restart)
-
-1. Start new Claude Code session
-2. Approve an edit to a protected config file
-3. End session (Ctrl+C or /exit)
-4. Stop hook should trigger, asking to restore
-5. Choose "Yes, restore" or "No, keep"
+See [Testing Guide](tests/README.md#test-stop-hook-stop_config_guardiansh) for
+manual and integration testing instructions.
 
 ## Implementation Details
 
@@ -1772,71 +1670,30 @@ only fires for the process that actually created the file.
 
 ## Integration Test Suite
 
-The hook system has a 103-test integration suite that exercises all four hooks
-via their real stdin/stdout contracts. The suite runs as three parallel agents
-using Claude Code's TeamCreate feature.
+The hook system has a 103-test integration suite. See
+[Testing Guide](tests/README.md#integration-test-suite) for suite structure,
+test layers, execution instructions, and known limitations.
 
 **Specification**: [adr-hook-integration-testing.md](specs/adr-hook-integration-testing.md)
 
 **Results**: [.claude/tests/hooks/results/RESULTS.md](../.claude/tests/hooks/results/RESULTS.md)
 
-### Suite Structure
+## Known Issues
 
-| Agent | Hook Tested | Tests | Scope |
-| --- | --- | --- | --- |
-| `dep-agent` | Infrastructure | 29 | Dependencies + settings registration |
-| `ml-agent` | `multi_linter.sh` | 42 | All file types, configs, toggles |
-| `pm-agent` | `enforce_package_managers.sh` | 32 | Block/approve/compound/cfg |
+### PostToolUse Hook Output Not in tool_result (CC v2.1.50)
 
-**Excluded hooks**: `protect_linter_configs.sh` is covered by the
-`test_hook.sh --self-test` suite. `stop_config_guardian.sh` requires an
-interactive session restart which cannot be triggered from a TeamCreate
-teammate context (teammates fire `TeammateIdle`, not `Stop`).
+Claude Code v2.1.50 does NOT propagate PostToolUse hook output into
+the `tool_result` field. The tool_result contains only the Write/Edit
+success message. However, mitmproxy capture proved that stderr+exit2
+IS delivered to the model as a `<system-reminder>` text block adjacent
+to the tool_result in the same API message. The model CAN read this
+content (confirmed: haiku's thinking referenced hook error text).
 
-### Two Test Layers
+Whether the agent reliably ACTS on this ambient system-reminder
+feedback (vs structured tool feedback) is under investigation. A
+compounding bug in `multi_linter.sh` (`rerun_phase2()` producing
+garbled multi-line output) was fixed in Step 1; the live verification
+test (Step 2) has not yet been executed.
 
-- **Layer 1 (stdin/stdout)**: Pipe JSON to the hook script, capture exit
-  code and output. This is the real execution path — identical to how Claude
-  Code delivers input to hooks.
-- **Layer 2 (live trigger)**: Invoke an actual tool call (Edit or Bash) and
-  observe whether the hook fires via the tool result.
-
-### Running the Suite
-
-The suite is orchestrated by the main agent following the
-[Orchestrator Playbook](specs/adr-hook-integration-testing.md#orchestrator-playbook).
-Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable.
-
-```text
-Phase 0: Archive previous results, create team
-Phase 1: dep-agent pre-flight (DEP01-DEP29)
-Phase 2: ml-agent + pm-agent in parallel (M01-M42, P01-P32)
-Phase 3: Aggregate JSONL, write RESULTS.md
-Phase 4: Compare with archived previous run (if available)
-```
-
-Results are written as JSONL to `.claude/tests/hooks/results/` with one file
-per agent. The aggregation command (`jaq -s`) produces pass/fail/skip counts
-across all 103 tests.
-
-### Known Limitations
-
-**PreToolUse hooks do not fire for TeamCreate teammate Bash tool calls**:
-When a teammate agent uses the Bash tool, PreToolUse hooks registered in
-`.claude/settings.json` are not triggered. This means P28 (live trigger
-for `enforce_package_managers.sh`) cannot be validated in a teammate
-session. PostToolUse hooks DO fire for teammate Edit/Write tool calls
-(confirmed by M19). This is a Claude Code agent teams architecture
-constraint, not a hook defect — all 31 direct invocation tests confirm
-the hook logic is correct.
-
-**no-hooks-settings.json path**: The subprocess prevention settings file
-lives at `~/.claude/no-hooks-settings.json` (user home directory). The
-integration test spec (DEP14) must check this path, not the project-local
-`.claude/no-hooks-settings.json`. The hook auto-creates this file if
-missing (see Settings File Auto-Creation above).
-
-**Stop hook untestable via TeamCreate**: The `stop_config_guardian.sh` hook
-fires on the `Stop` lifecycle event, which occurs at session end. TeamCreate
-teammates trigger `TeammateIdle` when they finish, not `Stop`. Testing the
-stop hook requires a manual interactive session (see Testing Stop Hook above).
+See [posttooluse-issue/](specs/posttooluse-issue/) for investigation
+details and the executable plan (`make-plankton-work.md`).

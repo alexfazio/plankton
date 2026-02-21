@@ -30,8 +30,9 @@ Without versioning and a tested-version baseline:
    impossible to distinguish "CC broke something" from "Plankton introduced
    a bug."
 
-The README (line 161) explicitly lists this as an open problem: "need a
+The README previously listed this as an open problem: "need a
 strategy for surviving Claude Code CLI updates without breaking."
+(Removed during the publication rewrite in commit 668be7f.)
 
 ### Scope of the Undocumented Contract
 
@@ -421,6 +422,60 @@ information. The existing bug report template already includes a
 `Claude Code version` field (line 25 of `.github/ISSUE_TEMPLATE/
 bug_report.md`), so the guidance reinforces established process.
 
+### D13: Recommend Disabling CC Auto-Updates
+
+**Decision**: The README should recommend that users disable Claude Code
+auto-updates when using Plankton. The `stable` release channel is offered
+as a softer alternative for users who want updates with a buffer.
+
+**Context**: Claude Code's native installation (the recommended method)
+includes a built-in auto-updater that downloads and installs updates in
+the background. Updates take effect on next launch. Homebrew and WinGet
+installations do not auto-update.
+
+**Recommended disable method**:
+
+```bash
+export DISABLE_AUTOUPDATER=1
+```
+
+Set in shell profile or in `~/.claude/settings.json` under `"env"`.
+Confirmed canonical by Anthropic staff in
+[CC #9327](https://github.com/anthropics/claude-code/issues/9327).
+
+The older `claude config set -g autoUpdates disabled` is **deprecated**
+as of September 2025 per
+[CC #2898](https://github.com/anthropics/claude-code/issues/2898) and
+had known persistence issues.
+
+**Softer alternative**: The `stable` channel installs versions ~1 week
+behind `latest`, skipping releases with major regressions:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash -s stable
+```
+
+**Placement**: Brief mention in the caution box (risk awareness), full
+instructions in Quick Start prerequisites (actionable setup step).
+
+**Alternatives considered**:
+
+| Approach | Pros | Cons | Verdict |
+| --- | --- | --- | --- |
+| **Disable (chosen)** | User controls timing | May miss CC updates | **Yes** |
+| `stable` channel | Buffered updates | Auto-update still runs | Softer option |
+| No recommendation | Less friction for new users | Silent breakage risk | No |
+| Hard requirement | Strongest protection | Hostile, prescriptive | No (D7) |
+
+**Rationale**: Plankton depends on 13+ undocumented CC behaviors (see
+"Scope of the Undocumented Contract"). A silent auto-update that changes
+any of these could break hooks without warning. Config protection hooks
+are safety-critical — if they break silently, the agent can modify linter
+configs unblocked. Users should control when CC updates happen so they
+can verify hooks still work after updating. The `stable` channel reduces
+risk without requiring manual management, making it a reasonable middle
+ground for users who prefer automatic updates.
+
 ## Implementation Plan
 
 Ordered sequence of changes to implement the decisions above:
@@ -434,23 +489,15 @@ via `gh api -X PATCH repos/alexfazio/plankton -f is_template=false`
 on 2026-02-21. The README Quick Start must change from "Use this
 template" to clone instructions (Step 2).
 
-### Step 1: Add cc_tested_version to config.json
+### Step 1: Add cc_tested_version to config.json (done)
 
-Add a top-level field to `.claude/hooks/config.json`:
+Added `"cc_tested_version": "2.1.50"` as a top-level field in
+`.claude/hooks/config.json`. Documentation field only — no hook script
+reads it yet. The `$schema` validation does not reject unknown keys.
 
-```json
-{
-  "cc_tested_version": "2.1.50",
-  ...existing fields...
-}
-```
+### Step 2: Update README (done)
 
-This is a documentation field only. No hook script reads it yet. The
-`$schema` validation will not reject unknown keys.
-
-### Step 2: Update README
-
-Four changes to `README.md`:
+Five changes to `README.md`:
 
 1. **Badge** at the top (after the mascot image, before the tagline).
    Use a dynamic shields.io badge that reads `cc_tested_version` from
@@ -461,21 +508,20 @@ Four changes to `README.md`:
    ![Claude Code compatibility](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexfazio%2Fplankton%2Fmain%2F.claude%2Fhooks%2Fconfig.json&query=%24.cc_tested_version&prefix=%3E%3D%20&label=Claude%20Code&color=blue)
    ```
 
-2. **Prerequisites note** in the Quick Start section, after "Only `jaq` and
-   `ruff` are required":
+2. **Auto-update recommendation** (D13) — added as Quick Start step 1
+   (before "Clone the repository") with two options: `DISABLE_AUTOUPDATER=1`
+   env var (full disable) or `stable` channel (softer alternative).
 
-   ```markdown
-   Tested with Claude Code >= 2.1.50. Check your version with
-   `claude --version`.
-   ```
+3. **Merge caution box** (D12) — caution box updated with CC version
+   check, auto-update warning, and issue-filing guidance.
 
-3. **Merge caution box** — replace the existing caution box content
-   with the merged version from D12 that includes the CC version
-   check and issue-filing guidance.
+4. **Prerequisites note** — CC version check (`claude --version`) and
+   tested baseline included in the new Quick Start step 1.
 
-4. **Remove the TODO item** on line 161 ("need a strategy for surviving
-   Claude Code CLI updates without breaking") since this ADR addresses
-   it.
+5. **Remove the TODO item** ("need a strategy for surviving Claude Code
+   CLI updates without breaking") since this ADR addresses it.
+   Done — the TODO list was rewritten during the README publication
+   rewrite (commit 668be7f).
 
 ### Step 3: Commit Versioning Infrastructure
 
@@ -523,8 +569,13 @@ relevant:
 
 ## References
 
-- [CC hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks)
+- [Claude Code Hooks Reference (current canonical URL)](https://code.claude.com/docs/en/hooks)
+- [Claude Code Setup Documentation (auto-updates section)](https://code.claude.com/docs/en/setup)
+- [CC #114 — Allow disabling automatic updates](https://github.com/anthropics/claude-code/issues/114)
+- [CC #12564 — Documentation inconsistency for auto-update disable setting](https://github.com/anthropics/claude-code/issues/12564)
+- [CC #9327 — DISABLE_AUTOUPDATER confirmed canonical by Anthropic staff](https://github.com/anthropics/claude-code/issues/9327)
+- [CC #2898 — autoUpdates config deprecated by Anthropic staff (Sept 2025)](https://github.com/anthropics/claude-code/issues/2898)
+- [Semantic Versioning 2.0.0 Specification](https://semver.org/)
 - [ADR: Hook JSON Schema Convention](adr-hook-schema-convention.md)
 - [ADR: Hook Integration Testing](adr-hook-integration-testing.md)
-- [Semantic Versioning 2.0.0](https://semver.org/) (versioning scheme for Plankton)
 - README.md:161: "strategy for surviving CC updates"

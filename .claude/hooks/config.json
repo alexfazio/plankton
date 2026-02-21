@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "cc_tested_version": "2.1.50",
   "_comment": "Claude Code Hooks Configuration - edit this file to customize hook behavior",
   "languages": {
     "python": true,

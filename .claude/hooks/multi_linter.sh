@@ -501,13 +501,13 @@ rerun_phase2() {
     python)
       # Ruff violations
       local v
-      v=$(ruff check --preview --output-format=json "${fp}" 2>/dev/null || echo "[]")
+      v=$(ruff check --preview --output-format=json "${fp}" 2>/dev/null) || true
       count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
 
       # ty violations (uv run for project venv)
       if command -v uv >/dev/null 2>&1; then
         local ty_out
-        ty_out=$(uv run ty check --output-format gitlab "${fp}" 2>/dev/null || echo "[]")
+        ty_out=$(uv run ty check --output-format gitlab "${fp}" 2>/dev/null) || true
         local ty_count
         ty_count=$(echo "${ty_out}" | jaq 'length' 2>/dev/null || echo "0")
         count=$((count + ty_count))
@@ -538,7 +538,7 @@ rerun_phase2() {
       # bandit violations
       if command -v uv >/dev/null 2>&1; then
         local bandit_out
-        bandit_out=$(uv run bandit -f json -q "${fp}" 2>/dev/null || echo '{"results":[]}')
+        bandit_out=$(uv run bandit -f json -q "${fp}" 2>/dev/null) || true
         local bandit_count
         bandit_count=$(echo "${bandit_out}" | jaq '.results | length // 0' 2>/dev/null || echo "0")
         count=$((count + bandit_count))
@@ -558,7 +558,7 @@ rerun_phase2() {
     shell)
       if command -v shellcheck >/dev/null 2>&1; then
         local v
-        v=$(shellcheck -f json "${fp}" 2>/dev/null || echo "[]")
+        v=$(shellcheck -f json "${fp}" 2>/dev/null) || true
         count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
       fi
       ;;
@@ -594,7 +594,7 @@ rerun_phase2() {
     dockerfile)
       if command -v hadolint >/dev/null 2>&1; then
         local v
-        v=$(hadolint --no-color -f json "${fp}" 2>/dev/null || echo "[]")
+        v=$(hadolint --no-color -f json "${fp}" 2>/dev/null) || true
         count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
       fi
       ;;
@@ -804,7 +804,7 @@ handle_typescript() {
           code: .category,
           message: .description,
           linter: "biome"
-        }]' 2>/dev/null || echo "[]")
+        }]' 2>/dev/null) || biome_violations="[]"
 
       if [[ "${biome_violations}" != "[]" ]] && [[ -n "${biome_violations}" ]]; then
         collected_violations=$(echo "${collected_violations}" "${biome_violations}" \
@@ -983,8 +983,8 @@ case "${file_path}" in
     is_excluded_from_security_linters "${file_path}" && _bandit_rc=0 || _bandit_rc=$?
     if [[ ${_bandit_rc} -eq 0 ]]; then _excluded_bandit=true; fi
     if ! "${_excluded_bandit}" && command -v uv >/dev/null 2>&1; then
-      bandit_output=$(uv run bandit -f json -q "${file_path}" 2>/dev/null || echo '{"results":[]}')
-      bandit_results=$(echo "${bandit_output}" | jaq '.results // []' 2>/dev/null || echo "[]")
+      bandit_output=$(uv run bandit -f json -q "${file_path}" 2>/dev/null) || true
+      bandit_results=$(echo "${bandit_output}" | jaq '.results // []' 2>/dev/null) || bandit_results="[]"
       if [[ "${bandit_results}" != "[]" ]] && [[ "${bandit_results}" != "null" ]]; then
         # Convert bandit JSON to standard format
         bandit_converted=$(echo "${bandit_results}" | jaq '[.[] | {
@@ -1277,7 +1277,7 @@ fi
 
 # Verify: re-run Phase 1 + Phase 2
 rerun_phase1 "${file_path}" "${file_type}"
-remaining=$(rerun_phase2 "${file_path}" "${file_type}")
+remaining=$(rerun_phase2 "${file_path}" "${file_type}" | tail -1)
 
 if [[ "${remaining}" -eq 0 ]]; then
   exit 0 # Fixed successfully

@@ -36,26 +36,43 @@ Like the organism: tiny, everywhere, filtering everything.
 > [!CAUTION]
 > Research project under active development. Hooks are tested against
 > Claude Code >= 2.1.50 (see badge). Newer CC versions usually work
-> but are not guaranteed. If you encounter breakage, file an issue
-> including the output of `claude --version`.
+> but are not guaranteed. **Disable CC auto-updates** to prevent
+> silent breakage (see Quick Start). If you encounter issues, file a
+> report including the output of `claude --version`.
 
 ## quick start
 
-1. **Clone the repository**:
+1. **Disable Claude Code auto-updates** (recommended). Plankton depends on
+   undocumented CC internals — a silent auto-update can break hooks without
+   warning. Pick one:
+
+   ```bash
+   # Option A: disable auto-updates entirely (most reliable)
+   echo 'export DISABLE_AUTOUPDATER=1' >> ~/.zshrc && source ~/.zshrc
+
+   # Option B: use the stable channel (~1 week behind latest, fewer regressions)
+   curl -fsSL https://claude.ai/install.sh | bash -s stable
+   ```
+
+   Check your current version: `claude --version`
+
+   Tested with Claude Code >= 2.1.50.
+
+2. **Clone the repository**:
 
    ```bash
    git clone https://github.com/alexfazio/plankton.git
    cd plankton
    ```
 
-2. **Install dependencies**:
+3. **Install dependencies**:
 
    ```bash
    pip install uv
    uv sync --all-extras
    ```
 
-3. **Start a Claude Code session**. Hooks activate automatically.
+4. **Start a Claude Code session**. Hooks activate automatically.
 
 Only `jaq` and `ruff` are required. Everything else is optional and
 gracefully skipped if not installed. See [docs/SETUP.md](docs/SETUP.md)
