@@ -27,9 +27,8 @@ mkdir -p "${fixture_project_dir}/.claude/hooks"
 fixtures_dir="$(dirname "${BASH_SOURCE[0]}")/fixtures"
 cp "${fixtures_dir}/config.json" "${fixture_project_dir}/.claude/hooks/config.json"
 cp "${fixtures_dir}/.markdownlint-cli2.jsonc" "${fixture_project_dir}/.markdownlint-cli2.jsonc"
-# Copy .markdownlint.jsonc rules file if it exists
-[[ -f "${project_dir}/.markdownlint.jsonc" ]] && \
-  cp "${project_dir}/.markdownlint.jsonc" "${fixture_project_dir}/.markdownlint.jsonc"
+# Copy .markdownlint.jsonc rules file from fixtures
+cp "${fixtures_dir}/.markdownlint.jsonc" "${fixture_project_dir}/.markdownlint.jsonc"
 
 # --- Counters ---
 passed=0

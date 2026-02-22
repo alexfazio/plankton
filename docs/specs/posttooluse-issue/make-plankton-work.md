@@ -700,6 +700,12 @@ the original version of this file (git history).
 | `.claude/tests/hooks/test_production_path.sh` | FU-4 | New: mock subprocess |
 | `.claude/tests/hooks/test_five_channels.sh` | FU-5 | New: channel output |
 | `docs/tests/README.md` | FU-6 | Regression test workflow section |
+| `.claude/hooks/test_hook.sh` | FU-13 | fixture_project_dir, 4 CLAUDE_PROJECT_DIR fixes, TOML trap, count thresholds |
+| `.claude/tests/hooks/verify_feedback_loop.sh` | FU-13 | fixture_project_dir, CLAUDE_PROJECT_DIR fix, TS gate fix, TOML trap fix |
+| `.claude/tests/hooks/test_production_path.sh` | FU-13 | HOME isolation (isolated_home in tmp_dir) |
+| `.claude/tests/hooks/fixtures/config.json` | FU-13 | New: maximal test config fixture |
+| `.claude/tests/hooks/fixtures/taplo.toml` | FU-13 | New: unused (see FU-15) |
+| `.claude/tests/hooks/fixtures/.markdownlint-cli2.jsonc` | FU-13 | New: minimal markdownlint config |
 
 ## Rollback
 
@@ -742,6 +748,7 @@ mitmproxy evidence is the achievable verification checkpoint.
 - [x] Follow-up: production path test 8/8 pass (mock subprocess)
 - [x] Follow-up: five-channel matrix test 20/20 pass + mitmproxy runbook
 - [x] Step 2 live: agent acknowledges violations AND Edits (3/3 iterations)
+- [x] FU-13: test config isolation — 170 tests pass with fixture configs (112+28+10+20)
 - [N/A] OR: Root cause identified if main agent does NOT act (Step 3)
 - [N/A] OR: Downgrade/upstream issue resolves the feedback loop (Step 4)
 
@@ -1271,23 +1278,24 @@ feedback loop fix:
     (2026-02-22, HOOK_SKIP_SUBPROCESS exit code + TS disabled
     config + SC2069, 110/2 → 112/0, see Session 2 report)
 13. **Test config isolation — decouple test suite from production
-    config.json** — OPEN. Four helpers in `test_hook.sh`
-    (`test_temp_file`, `test_output_format`, `test_model_selection`,
-    `test_stderr_json`) and all of `verify_feedback_loop.sh` inherit
-    production config via unset `CLAUDE_PROJECT_DIR`. Design: create
-    shared maximal fixture at `.claude/tests/hooks/fixtures/config.json`
-    (all languages on, all tools enabled including knip/tsgo/oxlint,
-    `biome_nursery: "error"`). Each test file copies fixture into a
-    temp `test_project_dir` at setup. Per-scenario configs (TS
-    disabled, PM modes, delegation disabled) continue using inline
-    heredocs. Already-isolated tests (`test_production_path.sh`,
-    `test_five_channels.sh`) unchanged. Discovered via spec:clarify
-    review (2026-02-22) following Session 2 TS disabled fix (FU-12B).
-    Open questions: TOML fixture needs `taplo.toml` in test project
-    dir; linter config files (`.ruff.toml`, `biome.json`, `.yamllint`)
-    may need copies or linters fall back to defaults (unverified);
-    `test_production_path.sh` writes to real `$HOME/.claude/` (HOME
-    isolation is a separate concern per Git/Sharness pattern).
+    config.json** — RESOLVED (2026-02-22, see Session 3 report below).
+    Shared maximal fixture at `.claude/tests/hooks/fixtures/config.json`.
+    All four helpers + `verify_feedback_loop.sh` + `test_production_path.sh`
+    now use isolated configs/HOME. TOML remains in project tree (taplo
+    CWD limitation) but cleanup is EXIT-trapped. Structural count
+    assertions loosened from exact to threshold.
+14. **`feedback_count_shell` still uses production `project_dir`** —
+    RESOLVED (2026-02-22). Changed `${project_dir}` to
+    `${fixture_project_dir}` at line 1343 of `test_hook.sh`.
+15. **Dead `taplo.toml` fixture file** — RESOLVED (2026-02-22).
+    Deleted `.claude/tests/hooks/fixtures/taplo.toml` (unused).
+16. **`.markdownlint.jsonc` copied from production at runtime** —
+    RESOLVED (2026-02-22). Created static fixture at
+    `fixtures/.markdownlint.jsonc`. Both `test_hook.sh` and
+    `verify_feedback_loop.sh` now copy from fixtures dir.
+17. **Fixture config `exclusions` includes `.claude/`** — RESOLVED
+    (2026-02-22). Added `_exclusions_warning` key to fixture
+    `config.json` documenting the `.claude/` skip trap.
 
 ---
 
@@ -1668,6 +1676,153 @@ shellcheck multi_linter.sh:      0 new violations (info only)
 | `docs/REFERENCE.md` | 9 | Investigation Principles section |
 | `make-plankton-work.md` | 10 | Footnote [†] RESOLVED |
 | `posttoolusewrite-...md` | 11 | 10 sections → redirect stubs |
+
+---
+
+## Follow-up Items Completion Report (Session 3, 2026-02-22)
+
+Commits: `87b97d6` (prior sessions work), `b974438` (FU-13 test hardening).
+
+**Scope**: FU-13 (test config isolation) expanded to full test hardening —
+decoupling all tests from production config, real HOME, and project tree
+where feasible. Planned as 7 slices (A-G) using `/planning-tdd`.
+
+**Process note**: TDD red-green-refactor was planned but edits were applied
+in bulk via Python script with post-hoc verification (all 170 tests green).
+
+### Slice A: Shared Fixture Files (3 new files)
+
+Created `.claude/tests/hooks/fixtures/`:
+
+| File | Purpose |
+| ---- | ------- |
+| `config.json` | Maximal config — all languages on, all optional tools enabled |
+| `taplo.toml` | Created for TOML isolation — **unused** (see FU-15) |
+| `.markdownlint-cli2.jsonc` | Minimal markdownlint-cli2 config |
+
+### Slices B+C: test_hook.sh Config Isolation
+
+- `test_temp_file`, `test_output_format`, `test_model_selection`: added
+  `CLAUDE_PROJECT_DIR="${fixture_project_dir}"` (was unset — hook used defaults)
+- `test_stderr_json`: changed from `"${project_dir}"` to
+  `"${fixture_project_dir}"` (was using production config)
+- Inline markdown test: same fix
+- `fixture_project_dir` created at top of `run_self_test()` with fixture
+  config + `.markdownlint-cli2.jsonc` + `.markdownlint.jsonc` (from project)
+
+**Missed**: `feedback_count_shell` (line 1343) still uses `${project_dir}` —
+see FU-14.
+
+### Slice D: verify_feedback_loop.sh Config Isolation
+
+- Created `fixture_project_dir` in `tmp_dir` with fixture config +
+  markdownlint configs
+- Replaced `CLAUDE_PROJECT_DIR="${project_dir}"` in `run_check()` with
+  `"${fixture_project_dir}"`
+- TS gate config read now uses fixture config
+- Removed fragile trap override for TOML cleanup (now in main EXIT trap)
+
+### Slice E: TOML Fixture Isolation (partial)
+
+**Plan**: Place TOML fixtures in `${temp_dir}/toml_project/` with co-located
+`taplo.toml`. **Reality**: taplo resolves include globs relative to CWD
+(project root), not the config file location. The approach failed.
+
+**Fallback**: TOML fixtures remain in `${project_dir}/test_fixture_broken.toml`
+(both files) but cleanup is now EXIT-trapped instead of inline `rm -f`
+(test_hook.sh) or fragile trap override (verify_feedback_loop.sh).
+
+### Slice F: HOME Isolation in test_production_path.sh
+
+- Created `isolated_home="${tmp_dir}/home"` with pre-populated
+  `no-hooks-settings.json`
+- `export HOME="${isolated_home}"` — no more writes to real `$HOME/.claude/`
+- Removed old `created_settings` conditional setup (lines 45-57) and
+  cleanup (lines 273-276)
+- EXIT trap on `tmp_dir` handles all cleanup
+
+### Slice G: Structural Count Assertions
+
+- `jaq_merge_count`: `-eq 13` → `-ge 13`
+- `jaq_conversion_guard`: `-eq 4` → `-ge 4`
+- `jaq_merge_guard` (exact-zero check): unchanged (correct negative assertion)
+
+### Verification Results (Session 3)
+
+```text
+test_hook.sh --self-test:       112 pass / 0 fail
+verify_feedback_loop.sh:         28 pass / 0 fail / 4 skip (biome)
+test_production_path.sh:         10 pass / 0 fail
+test_five_channels.sh:           20 pass / 0 fail
+```
+
+### Files Changed (Session 3)
+
+| File | Changes |
+| ---- | ------- |
+| `test_hook.sh` | fixture_project_dir setup, 4 helper CLAUDE_PROJECT_DIR fixes, TOML EXIT trap, count assertion loosening |
+| `verify_feedback_loop.sh` | fixture_project_dir setup, CLAUDE_PROJECT_DIR fix, TS gate fix, TOML trap fix |
+| `test_production_path.sh` | HOME isolation (isolated_home in tmp_dir) |
+| `fixtures/config.json` | New: maximal test config |
+| `fixtures/taplo.toml` | New: unused (see FU-15) |
+| `fixtures/.markdownlint-cli2.jsonc` | New: minimal markdownlint config |
+
+### Review Findings → New Follow-up Items
+
+Post-implementation review identified 4 issues (FU-14 through FU-17):
+
+- **FU-14**: `feedback_count_shell` line 1343 still uses `${project_dir}` — one-line fix
+- **FU-15**: `fixtures/taplo.toml` is dead code — delete or repurpose
+- **FU-16**: `.markdownlint.jsonc` copied from production at runtime — should be static fixture
+- **FU-17**: Fixture config exclusions include `.claude/` — latent skip trap
+
+---
+
+## Follow-up Items Completion Report (Session 4, 2026-02-22)
+
+Executed with hooks disabled (all edits target protected files or fixtures
+in `.claude/`). Resolved FU-14 through FU-17 — the final 4 open items.
+
+**Process note**: Plan specified TDD red-green-refactor for Steps 1 and 3.
+In practice, both were applied as green-only (direct fix + full suite
+verification). Existing test coverage (`feedback_count_shell`, markdown
+feedback tests) served as the regression gate. Risk: low — config-path
+changes only.
+
+### Changes
+
+| # | Item | File | Change |
+| --- | ---- | ---- | ------ |
+| 1 | FU-14 | `test_hook.sh:1343` | `project_dir` → `fixture_project_dir` |
+| 2 | FU-15 | `fixtures/taplo.toml` | Deleted (unused — taplo resolves globs from CWD) |
+| 3 | FU-16 | `fixtures/.markdownlint.jsonc` | New: static copy of production `.markdownlint.jsonc` |
+| 3 | FU-16 | `test_hook.sh:32-35` | Copy from `${fixtures_dir}` instead of `${project_dir}` |
+| 3 | FU-16 | `verify_feedback_loop.sh:30-32` | Same — copy from `${fixtures_dir}` |
+| 4 | FU-17 | `fixtures/config.json` | Added `_exclusions_warning` key documenting `.claude/` skip trap |
+
+### Deviations from Plan
+
+- **Step 3**: Added `local fixtures_dir` variable in `test_hook.sh` (not
+  in plan — necessary because `fixtures_dir` was only defined in
+  `verify_feedback_loop.sh`). Removed conditional `[[ -f ... ]] &&` guard
+  (fixture file is guaranteed to exist; unconditional `cp` is correct).
+- **Edge case verified**: `_exclusions_warning` key in `config.json` is
+  safe — `multi_linter.sh` uses targeted jaq path queries (`.languages.X`,
+  `.exclusions`, `.subprocess.X`), never iterates all top-level keys.
+
+### Verification Results
+
+```text
+test_hook.sh --self-test:       112 pass / 0 fail
+verify_feedback_loop.sh:         28 pass / 0 fail / 4 skip (biome)
+test_production_path.sh:         10 pass / 0 fail
+test_five_channels.sh:           20 pass / 0 fail
+```
+
+### Closure
+
+All 17 follow-up items (FU-1 through FU-17) are now RESOLVED. No new
+items emerged from the post-implementation review.
 
 ---
 

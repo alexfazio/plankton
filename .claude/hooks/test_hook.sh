@@ -29,10 +29,10 @@ run_self_test() {
   # markdownlint-cli2 discovers config by walking up from the linted file
   cp "${script_dir}/../tests/hooks/fixtures/.markdownlint-cli2.jsonc" \
     "${fixture_project_dir}/.markdownlint-cli2.jsonc"
-  # Copy .markdownlint.jsonc rules file if it exists in the project
-  [[ -f "${project_dir}/.markdownlint.jsonc" ]] && \
-    cp "${project_dir}/.markdownlint.jsonc" \
-      "${fixture_project_dir}/.markdownlint.jsonc"
+  # Copy .markdownlint.jsonc rules file from fixtures
+  local fixtures_dir="${script_dir}/../tests/hooks/fixtures"
+  cp "${fixtures_dir}/.markdownlint.jsonc" \
+    "${fixture_project_dir}/.markdownlint.jsonc"
   echo "=== Hook Self-Test Suite ==="
   echo ""
 
@@ -1340,7 +1340,7 @@ console.log("test");' >"${ts_feedback_file}"
   set +e
   local shell_count_stderr
   shell_count_stderr=$(echo "${shell_count_input}" | HOOK_SKIP_SUBPROCESS=1 \
-    CLAUDE_PROJECT_DIR="${project_dir}" \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
     "${script_dir}/multi_linter.sh" 2>&1 >/dev/null)
   set -e
   local shell_hook_info

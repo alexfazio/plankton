@@ -36,6 +36,7 @@
 		".semgrep.yml",
 		"knip.json"
 	],
+	"_exclusions_warning": "'.claude/' below means fixtures in fixture_project_dir/.claude/ will be silently skipped by the hook. Place test fixtures outside .claude/ subtree.",
 	"exclusions": [
 		"tests/",
 		"docs/",
