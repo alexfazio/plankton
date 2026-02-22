@@ -190,6 +190,19 @@ agents modify linting rules, and more.
 
 Contributions are welcome.
 
+## Star History
+
+<!-- markdownlint-disable MD033 MD013 -->
+<a href="https://star-history.com/#alexfazio/plankton&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=alexfazio/plankton&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=alexfazio/plankton&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=alexfazio/plankton&type=Date" />
+ </picture>
+</a>
+<!-- markdownlint-enable MD013 -->
+<!-- markdownlint-enable MD033 -->
+
 ## license
 
 MIT
