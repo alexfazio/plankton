@@ -7,23 +7,25 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    # Linting & formatting
-    "ruff",
-    "ty",
-    "flake8",
-    "flake8-pydantic",
-    "flake8-async",
-    "vulture",
-    "bandit",
-    # Testing
-    "pytest",
-    "pytest-xdist",
-    # Pre-commit
-    "pre-commit",
-    # YAML linting
-    "yamllint",
-    # JSON schema validation
-    "check-jsonschema",
+  # Linting & formatting
+  "ruff",
+  "ty",
+  "flake8",
+  "flake8-pydantic",
+  "flake8-async",
+  "vulture",
+  "bandit",
+  # Testing
+  "pytest",
+  "pytest-xdist",
+  # Pre-commit
+  "pre-commit",
+  # YAML linting
+  "yamllint",
+  # JSON schema validation
+  "check-jsonschema",
+  "evalplus>=0.3.1",
+  "scipy>=1.17.0",
 ]
 
 [tool.pytest.ini_options]
@@ -38,6 +40,9 @@ skips = []
 min_confidence = 80
 paths = ["src"]
 exclude = ["tests", ".venv"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
 
 [build-system]
 requires = ["hatchling"]

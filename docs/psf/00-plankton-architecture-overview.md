@@ -165,7 +165,7 @@ graph TB
 
 ### multi_linter.sh (PostToolUse Hook)
 
-- **Location**: `.claude/hooks/multi_linter.sh` (~1,314 lines)
+- **Location**: `.claude/hooks/multi_linter.sh` (~1,319 lines)
 - **Responsibilities**:
   - Dispatches files to language-specific handlers based on extension
   - Runs three-phase lint: format, collect
@@ -245,12 +245,12 @@ graph TB
 
 ### test_hook.sh (Debug/Test Utility)
 
-- **Location**: `.claude/hooks/test_hook.sh` (~1,396 lines)
+- **Location**: `.claude/hooks/test_hook.sh` (~1,436 lines)
 - **Responsibilities**: Self-test suite covering all
   file types, model selection, TS handling, config
   protection, and edge cases
 - **Implementation**: `--self-test` runs tests with
-  `HOOK_SKIP_SUBPROCESS=1` for determinism. ~25 cases
+  `HOOK_SKIP_SUBPROCESS=1` for determinism. 112 cases
   including Dockerfile, model selection, TS tests
 
 ## Data Model
@@ -327,27 +327,13 @@ graph TB
 
 ## Testing & Quality
 
-- **Automated tests**: `test_hook.sh --self-test`
-  covers ~25 cases: file detection, model selection,
-  config protection, TS handling, fallback behavior
-- **Integration test suite**: 103 tests across 3
-  parallel agents (dep-agent 29, ml-agent 42,
-  pm-agent 32) via TeamCreate; results in
-  `.claude/tests/hooks/results/`
-- **Diagnostic test scripts** (`.claude/tests/hooks/`):
-  - `minimal-test-hook.sh` — stub hook emitting 3 violations to isolate
-    feedback loop
-  - `swap_settings.sh` — swaps `settings.json` for test isolation
-  - `test_five_channels.sh` — tests 5 PostToolUse output channels
-    (stderr/JSON × exit codes)
-  - `test_production_path.sh` — tests subprocess delegation with mock
-    `claude` binary
-  - `verify_feedback_loop.sh` — verifies `multi_linter.sh` produces
-    correct stderr JSON + exit 2; automates Step 2 of
-    `make-plankton-work.md`
-- **Pre-commit**: 15-hook pipeline mirrors CC hook
-  phases; runs `uv run pre-commit run --all-files`
-- **CI**: GitHub Actions runs pre-commit (lint) + pytest (test) on push/PR to main
+See [01-testing-infrastructure.md](01-testing-infrastructure.md)
+for the full testing PSF covering all 5 test layers, fixtures,
+CI pipeline, and 303+ automated checks.
+
+- **Quick reference**: `bash .claude/hooks/test_hook.sh --self-test`
+  (112 cases), `bash .claude/tests/hooks/verify_feedback_loop.sh`
+  (28 checks), `bash tests/stress/run_stress_tests.sh` (133 tests)
 - **Type safety**: Python 3.11+; ty in Phase 2b;
   ruff with 50+ rule categories in preview mode
 - **Shell quality**: ShellCheck max enforcement
@@ -383,7 +369,7 @@ graph TB
 
 ## Risks, Tech Debt, Open Questions
 
-- **Shell script size**: `multi_linter.sh` ~1,314
+- **Shell script size**: `multi_linter.sh` ~1,319
   lines; per-language modules would help
 - **Fragile parsing**: yamllint/flake8/markdownlint
   output parsed via `sed`; format changes break it
@@ -396,6 +382,35 @@ graph TB
 - **No Windows support**: Bash-based hooks require Unix-like environment
 - **macOS `timeout`**: Requires `brew install
   coreutils`; falls back to no timeout if absent
+
+## Benchmark Subsystem
+
+- **Location**: `benchmark/`
+- **Purpose**: A/B testing of Plankton hooks against EvalPlus
+  HumanEval+ and ClassEval benchmarks to measure hook impact
+  on code generation quality
+- **Components**:
+  - `runner.py` (~582 lines): Orchestrates A/B benchmark runs
+    — condition A (baseline, no hooks via `cc -bare`) vs
+    condition B (hooks active). Produces JSONL files consumable
+    by `evalplus.evaluate`. Supports both HumanEval+ (164 tasks)
+    and ClassEval (20 tasks)
+  - `analyze.py` (~135 lines): Post-benchmark statistical
+    analysis using `scipy.stats.binomtest` for significance
+    testing at α=0.05
+  - `classeval_wrapper.py` (~90 lines): ClassEval benchmark
+    adapter
+  - `evalplus_wrapper.py` (~28 lines): EvalPlus benchmark
+    adapter
+  - `prompt_template.txt` / `classeval_prompt_template.txt`:
+    Prompt templates for each benchmark
+  - `ClassEval_data.json`: ClassEval task definitions
+  - `prereqs.sh`: Prerequisite installation script
+- **Dependencies**: `scipy`, `evalplus`, Claude CLI
+- **Test coverage**: `tests/unit/test_runner.py` (416 lines),
+  `tests/unit/test_analyze.py` (170 lines),
+  `tests/unit/test_benchmark_integration.py` (81 lines)
+- **Spec**: `docs/specs/adr-plankton-benchmark.md`
 
 ## Supporting Files
 

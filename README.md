@@ -1,6 +1,6 @@
-# Plankton
-
 ![Plankton mascot](assets/plankton-cover.png)
+
+# plankton
 
 Write-time code quality enforcement for AI coding agents, built on Claude Code hooks.
 

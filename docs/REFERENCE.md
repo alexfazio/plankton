@@ -1387,7 +1387,7 @@ gradual cleanup via Boy Scout Rule: edit a file, own all its violations.
 | Criterion | Ruff | Black |
 | --- | --- | --- |
 | Performance | 0.10s (250k lines) | 3.20s (250k lines) |
-| Speed ratio | 1x (baseline) | 32x slower |
+| Speed ratio | 1x (baseline) | ~30x slower |
 | Compatibility | >99.9% Black-compatible | N/A |
 | Language | Rust | Python |
 | Config | .ruff.toml | pyproject.toml |
@@ -1399,8 +1399,8 @@ gradual cleanup via Boy Scout Rule: edit a file, own all its violations.
 2. **Compatibility**: >99.9% Black-compatible output means no quality loss
 3. **Simplicity**: Single tool for both formatting and linting reduces
    complexity
-4. **Official guidance**: Astral (ruff maintainers) explicitly states "not
-   intended to be used interchangeably with Black"
+4. **Official guidance**: Astral (ruff maintainers) describes ruff format as
+   "designed as a drop-in replacement for Black"
 
 ### Minor Differences from Black
 
@@ -1719,3 +1719,12 @@ test (Step 2) has not yet been executed.
 
 See [posttooluse-issue/](specs/posttooluse-issue/) for investigation
 details and the executable plan (`make-plankton-work.md`).
+
+---
+
+## References
+
+- [Ruff Formatter documentation (Astral)](https://docs.astral.sh/ruff/formatter/)
+- [Ruff Formatter announcement blog post](https://astral.sh/blog/the-ruff-formatter)
+- [Known deviations from Black (Ruff docs)](https://docs.astral.sh/ruff/formatter/black/)
+- [Claude Code Hooks reference (official)](https://code.claude.com/docs/en/hooks)
