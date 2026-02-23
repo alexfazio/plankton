@@ -1,65 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-
-# Virtual environments
-.venv/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# OS
+*.bak
 .DS_Store
-Thumbs.db
-
-# Linter / formatter caches
-.ruff_cache/
-.ty/
-.mypy_cache/
-
-# Node (jscpd, markdownlint-cli2)
+__pycache__/
 node_modules/
-
-# Test / coverage
-.pytest_cache/
-htmlcov/
-.coverage
-
-# Docker
-docker-compose.override.yml
-
-# Reports (jscpd output)
-reports/
-
-# TypeScript / JavaScript
-dist/
-.next/
-.turbo/
-*.tsbuildinfo
-coverage/
-.biome/
-
-# Claude Code session artifacts
-.claude/.tmp/
-.claude/plans/
-.claude/todos/
-.claude/settings.local.json
-
-# Publication hygiene — internal / private files
-assets/internal/
-docs/internal/
-docs/specs/
+cookies.json
+test.csv
+test_process.csv
+read_test_process.csv
 PLAN.md
-CLAUDE.md
-!/CLAUDE.md
-package-lock.json
 .claude/tests/hooks/results/.start_ts
 .claude/tests/hooks/results/archive/
-*.zip
-docs/**/*.zip
-.claude/**/*.zip
+reports/
+assets/internal/
+docs/internal/

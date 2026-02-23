@@ -335,8 +335,8 @@ RULES:
 
 The subprocess receives ONLY the prompt and has access to:
 
-- **Tools**: Edit, Read, Bash
-- **Max turns**: 10
+- **Tools**: Per-tier (haiku/sonnet: `Edit,Read`; opus: `Edit,Read,Write`)
+- **Max turns**: Per-tier (haiku/sonnet: 10; opus: 15)
 - **File context**: The file path is passed as an argument
 
 The subprocess does **NOT** see:
@@ -365,13 +365,13 @@ The subprocess does **NOT** see:
 |  [Prompt: "You are a code quality fixer..."]                                |
 |  [Subprocess response + Edit tool call]                                     |
 |  [Edit tool result]                                                         |
-|  [Subprocess response + Bash tool call]                                     |
-|  [Bash tool result]                                                         |
-|  ... (up to 10 turns)                                                       |
+|  [Subprocess response + Read tool call]                                     |
+|  [Read tool result]                                                         |
+|  ... (up to max_turns per tier)                                             |
 |  [Subprocess exits]                                                         |
 |                                                                             |
 |  Main agent NEVER sees subprocess context.                                  |
-|  Subprocess output is discarded: >/dev/null 2>&1                            |
+|  Subprocess stdout discarded (>/dev/null); stderr flows to hook             |
 |                                                                             |
 +-----------------------------------------------------------------------------+
 ```
@@ -382,7 +382,7 @@ The hook (bash script) sees:
 
 - **Stdin**: JSON with `tool_input.file_path`
 - **Linter outputs**: JSON format from each linter
-- **Subprocess exit code**: Ignored via `|| true`
+- **Subprocess exit code**: Captured and logged (timeout=124, errors=non-zero)
 - **Verification counts**: From `rerun_phase2()`
 
 ### Quick Reference
@@ -512,7 +512,7 @@ PostToolUse:Edit hook error: Failed with non-blocking status code 2
 |           Hook: BLOCKED (waiting for subprocess)                            |
 |                                                                             |
 |  T=1.5s   Subprocess starts, reads prompt                                   |
-|  to       Subprocess uses Edit/Read/Bash to fix violations                  |
+|  to       Subprocess uses Edit/Read to fix violations (per-tier tools)      |
 |  T=25s    (subprocess works autonomously)                                   |
 |           Main agent: BLOCKED                                               |
 |           Hook: BLOCKED                                                     |
@@ -858,10 +858,10 @@ If the file is missing, all features are enabled with sensible defaults.
 | `phases.auto_format` | bool | true | Phase 1 auto-format |
 | `phases.subprocess_delegation` | bool | true | Phase 3 subprocess delegation |
 | `hook_enabled` | bool | true | Master kill switch (disables all linting) |
-| `subprocess.timeout` | number | 300 | Subprocess timeout (seconds) |
-| `subprocess.model_selection.sonnet_patterns` | string | (regex) | Sonnet |
-| `subprocess.model_selection.opus_patterns` | string | (regex) | Opus route |
-| `subprocess.model_selection.volume_threshold` | number | 5 | Triggers Opus |
+| `subprocess.tiers` | object | — | Per-tier subprocess config (see [Phase 3 Subprocess](#phase-3-subprocess)) |
+| `subprocess.global_model_override` | string\|null | null | One model |
+| `subprocess.volume_threshold` | number | 5 | Violations that trigger opus |
+| `subprocess.settings_file` | string\|null | null | Override settings path |
 | `jscpd.session_threshold` | number | 3 | Files modified before jscpd runs |
 | `jscpd.scan_dirs` | str[] | ["src/","lib/"] | Dirs to scan for dupes |
 | `jscpd.advisory_only` | bool | true | Report-only mode (no blocking) |
@@ -881,7 +881,7 @@ If the file is missing, all features are enabled with sensible defaults.
 
 Environment variables override config.json values:
 
-- `HOOK_SUBPROCESS_TIMEOUT` overrides `subprocess.timeout`
+- `HOOK_SUBPROCESS_TIMEOUT` overrides per-tier timeout (and `timeout_override`)
 - `HOOK_SKIP_SUBPROCESS=1` disables subprocess regardless of config
 
 ### Package Manager Enforcement
@@ -1178,36 +1178,204 @@ Version 2.12.0+ is required for `disable-ignore-pragma` support.
 
 If not found, outputs `[hook:error] claude binary not found, cannot delegate`.
 
-## Subprocess Hook Prevention
+## Phase 3 Subprocess
 
-The subprocess spawned in Phase 3 uses `--settings ~/.claude/no-hooks-settings.json`
-to disable hooks during subprocess execution. The subprocess uses `--settings`
-flag to prevent recursive hook invocation.
+The Phase 3 subprocess is a `claude -p` process spawned by
+`multi_linter.sh` to fix violations that Phase 1 auto-formatting
+cannot handle. This section consolidates all subprocess configuration.
 
-**File location**: `~/.claude/no-hooks-settings.json` (user home directory, NOT
-project `.claude/`). This is a global Claude Code settings override, not a
-project-level file.
+### Invocation
 
-**Why this is needed:**
+The subprocess CLI call (`multi_linter.sh:549-556`):
 
-- `claude -p` subprocesses inherit hooks from the parent session by default
-- When the subprocess uses Edit to fix violations, the PostToolUse hook fires again
-- Without prevention, this causes recursive subprocess spawning and added latency
+```bash
+local disallowed_flag=()
+if [[ -n "${disallowed_tools}" ]]; then
+  disallowed_flag=(--disallowedTools "${disallowed_tools}")
+fi
+${timeout_cmd} "${claude_cmd}" -p "${prompt}" \
+  --dangerously-skip-permissions \
+  --settings "${settings_file}" \
+  "${disallowed_flag[@]}" \
+  --max-turns "${tier_max_turns}" \
+  --model "${model}" \
+  "${fp}" >/dev/null
+```
 
-**Why this is safe:**
+Key flags:
 
-- The parent hook's `rerun_phase2()` runs after subprocess exit
-- This verification step catches any remaining violations
-- Violations are not masked - they're reported by the parent
+- `--dangerously-skip-permissions` — enables headless operation
+  (always paired with `--disallowedTools` unless all tools allowed)
+- `--disallowedTools` — blacklist derived per tier (see Tool Scope)
+- `--settings` — project-local settings with hooks disabled
+- `>/dev/null` — stdout discarded; stderr flows to hook's stderr
 
-**Settings file** (`~/.claude/no-hooks-settings.json`):
+### Tier Configuration
+
+All subprocess settings are organized into `subprocess.tiers`
+in `.claude/hooks/config.json`:
+
+```json
+{
+  "subprocess": {
+    "_comment": "Per-tier config for Phase 3 subprocess...",
+    "tiers": {
+      "haiku": {
+        "patterns": "E[0-9]+|W[0-9]+|F[0-9]+|...",
+        "tools": "Edit,Read",
+        "max_turns": 10,
+        "timeout": 120
+      },
+      "sonnet": {
+        "patterns": "C901|PLR[0-9]+|...",
+        "tools": "Edit,Read",
+        "max_turns": 10,
+        "timeout": 300
+      },
+      "opus": {
+        "patterns": "unresolved-attribute|type-assertion",
+        "tools": "Edit,Read,Write",
+        "max_turns": 15,
+        "timeout": 600
+      }
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
+  }
+}
+```
+
+**Precedence**: `global_model_override` > `volume_threshold` >
+opus patterns > sonnet patterns > haiku patterns > fallback.
+When `global_model_override` is set, ALL tier selection is skipped.
+`max_turns_override` and `timeout_override` override per-tier
+values when set.
+
+**Unmatched patterns**: Trigger a stderr warning and fall back
+to haiku (cheapest-safe fallback).
+
+**Old config format**: Old flat keys (`subprocess.timeout`,
+`subprocess.model_selection.*`) are not supported. If detected,
+the hook emits a clear error with migration instructions.
+
+### Tool Scope
+
+Each tier declares allowed tools. The `--disallowedTools`
+blacklist is derived at runtime: (tool universe) minus
+(tier-specific tools). The tool universe is pinned in
+`multi_linter.sh:507`:
+
+```text
+tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task"
+```
+
+Update this list when upgrading `cc_tested_version`.
+
+| Tier | Allowed Tools | Blocked |
+| --- | --- | --- |
+| haiku | `Edit,Read` | Write, Bash, Glob, Grep, WebFetch, WebSearch, etc. |
+| sonnet | `Edit,Read` | Same as haiku |
+| opus | `Edit,Read,Write` | Bash, Glob, Grep, WebFetch, WebSearch, etc. |
+
+**Safety invariant**: `--dangerously-skip-permissions` is never
+passed without `--disallowedTools`, except when tier tools equal
+the full tool universe (all tools allowed). In that case the
+flag is omitted and a warning is emitted.
+
+### Model Selection
+
+Tier selection is based on violation code patterns:
+
+| Violation Type | Tier | Rationale |
+| --- | --- | --- |
+| Simple (F841, SC2034, E/W/F codes) | haiku | Fast, cheap |
+| YAML/JSON/TOML/Dockerfile | haiku | Config formatting |
+| Complexity (C901, PLR\*) | sonnet | Refactoring reasoning |
+| Pydantic (PYD001-PYD006) | sonnet | Pydantic knowledge |
+| FastAPI (FAST001-003) | sonnet | Framework patterns |
+| Type errors (unresolved-import) | sonnet | Import resolution |
+| Markdown (MD013, MD060) | sonnet | Semantic shortening |
+| Docstrings (D001-D418) | sonnet | Semantic rewriting |
+| Complex type (unresolved-attribute) | opus | Architectural |
+| >5 violations (any type) | opus | Volume analysis |
+
+| Model | Speed | Cost | Capability |
+| --- | --- | --- | --- |
+| Haiku | ~5s | Lowest | Basic fixes |
+| Sonnet | ~15s | Medium | Refactoring |
+| Opus | ~25s | Highest | Complex types |
+
+Patterns are loaded dynamically from `config.json` via
+`load_model_patterns()` at startup (`subprocess.tiers.{tier}.patterns`),
+with readonly applied after loading. Defaults are used as fallback
+if config.json is missing.
+
+### Settings File
+
+**Location**: `.claude/subprocess-settings.json` (project-local,
+inside the project's `.claude/` directory).
 
 ```json
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "disableAllHooks": true
+  "disableAllHooks": true,
+  "skipDangerousModePermissionPrompt": true
 }
 ```
+
+**Why hooks are disabled**: `claude -p` subprocesses inherit
+hooks from the parent session. Without `disableAllHooks`, the
+subprocess's Edit calls would re-trigger the PostToolUse hook,
+causing recursive subprocess spawning.
+
+**Override**: Set `subprocess.settings_file` in config.json to
+use a different settings file (e.g., for Z.AI provider routing):
+
+```json
+{
+  "subprocess": {
+    "settings_file": "~/.claude/glm-no-hooks-settings.json"
+  }
+}
+```
+
+**Auto-creation**: If `.claude/subprocess-settings.json` is missing,
+the hook auto-creates it using atomic `mktemp+mv` (safe for
+concurrent invocations). A warning is logged:
+
+```text
+[hook:warning] created missing .claude/subprocess-settings.json
+```
+
+### Overrides
+
+| Override | Scope | Effect |
+| --- | --- | --- |
+| `global_model_override` | All tiers | Skips pattern match and volume check |
+| `max_turns_override` | All tiers | Overrides per-tier `max_turns` |
+| `timeout_override` | All tiers | Overrides per-tier `timeout` |
+| `HOOK_SUBPROCESS_TIMEOUT` env | Runtime | Overrides timeout at shell level |
+| `HOOK_SKIP_SUBPROCESS=1` env | Runtime | Disables subprocess entirely |
+
+### Safety
+
+`--dangerously-skip-permissions` is an implementation invariant,
+not a user toggle. The subprocess is bounded by:
+
+- **Tool scope**: `--disallowedTools` blocks everything outside
+  the tier's tool list
+- **Turn limit**: `--max-turns` per tier (default 10-15)
+- **Timeout**: Per tier (default 120s-600s)
+- **Single-file context**: Receives exactly one file path
+- **No hooks**: Settings disable all hooks
+- **Non-fatal**: Subprocess failure does not block the parent hook
+
+These constraints make the subprocess comparable to a
+deterministic auto-formatter that already runs without permission
+prompts in Phase 1.
 
 ## Model Usage in Hook System
 
@@ -1224,7 +1392,7 @@ project-level file.
 |  PostToolUse Hook           None (bash script)      N/A                     |
 |  (multi_linter.sh)                                                          |
 |                                                                             |
-|  Subprocess                 Dynamic selection       Yes (complexity-based)  |
+|  Subprocess                 Per-tier selection      Yes (subprocess.tiers)  |
 |  (claude -p)                haiku/sonnet/opus                               |
 |                                                                             |
 |  Stop Hook                  Configurable via        Yes (in settings.json)  |
@@ -1232,92 +1400,6 @@ project-level file.
 |                                                                             |
 +-----------------------------------------------------------------------------+
 ```
-
-## Subprocess Model Selection
-
-The subprocess uses dynamic model selection based on violation complexity:
-
-| Violation Type | Model | Rationale |
-| --- | --- | --- |
-| Simple (F841, SC2034) | haiku | Fast, cheap |
-| YAML (line-length, indentation) | haiku | Config formatting |
-| JSON/TOML syntax errors | haiku | Syntax fixes |
-| Dockerfile (DL3007, DL3008) | haiku | Pin/label additions |
-| Complexity (C901, PLR*) | sonnet | Refactoring reasoning |
-| Pydantic (PYD001-PYD006) | sonnet | Pydantic knowledge |
-| FastAPI (FAST001-003) | sonnet | Framework-specific patterns |
-| Type errors (unresolved-import) | sonnet | Import resolution |
-| **Markdown (MD013, MD060)** | sonnet | Semantic shortening |
-| **Docstrings (D001-D418)** | sonnet | Semantic rewriting |
-| Complex type (unresolved-attribute) | opus | Architectural changes |
-| >5 violations (any type) | opus | Volume analysis |
-
-**Note on Markdown**: MD013 (line length) and MD060 (table style) require
-semantic understanding to fix properly. The subprocess receives a specialized
-prompt with fix strategies:
-
-- MD013: Shorten content while preserving meaning (not wrap)
-- MD060: Add spaces around ALL pipes in separator rows
-- Tables: Edit entire rows to maintain column consistency
-
-**Note on Docstrings**: D rules (pydocstyle) require semantic understanding.
-The subprocess receives a specialized prompt with fix strategies:
-
-- D401: Change imperative mood ("Returns" -> "Return")
-- D417: Add Args section from function signature
-- D205/D400/D415: Fix formatting and punctuation
-
-### Model Selection Trade-offs
-
-| Model | Speed | Cost | Capability | Use Case |
-| --- | --- | --- | --- | --- |
-| Haiku | ~5s | Lowest | Basic | Simple (F841, SC2034) |
-| Sonnet | ~15s | Medium | Good | Refactoring, Pydantic |
-| Opus | ~25s | Highest | Best | Complex types, >5 issues |
-
-### Selection Logic (in `spawn_fix_subprocess()`)
-
-```bash
-model="haiku"  # default
-if [[ has_sonnet_codes ]]; then model="sonnet"; fi
-if [[ has_opus_codes ]] || [[ count > volume_threshold ]]; then model="opus"; fi
-```
-
-### Model Selection Patterns
-
-The sonnet and opus code patterns are loaded dynamically from `config.json` via
-`load_model_patterns()` at startup, with readonly applied after loading. This
-allows pattern customization without editing the script. The defaults (used as
-fallback if config.json is missing) are:
-
-```bash
-# Default patterns (overridden by config.json subprocess.model_selection.*)
-SONNET_CODE_PATTERN='C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+'
-OPUS_CODE_PATTERN='unresolved-attribute|type-assertion'
-```
-
-The actual `config.json` may contain extended patterns (e.g., TypeScript-specific
-Semgrep rule names appended to `sonnet_patterns`). See
-`.claude/hooks/config.json` `subprocess.model_selection` for the current values.
-
-**Pattern Components**:
-
-| Pattern | Codes Matched | Rationale |
-| --- | --- | --- |
-| `C901` | McCabe complexity | Refactoring required |
-| `PLR[0-9]+` | Pylint refactoring | PLR0913, PLR0915, etc. |
-| `PYD[0-9]+` | Pydantic model | PYD001-PYD006 |
-| `FAST[0-9]+` | FastAPI patterns | FAST001-003 |
-| `ASYNC[0-9]+` | Async patterns | ASYNC100+ |
-| `unresolved-import` | Type checker | Import resolution |
-| `MD[0-9]+` | Markdown | MD001-MD065 |
-| `D[0-9]+` | Docstrings | D100-D420 |
-
-**Why Dynamic Loading**: Patterns are loaded from `config.json` so new linter
-categories (e.g., ASYNC patterns, TypeScript Semgrep rules) can be added without
-editing the script. The `load_model_patterns()` function applies readonly after
-loading, ensuring consistency between actual model selection and debug output
-(HOOK_DEBUG_MODEL=1).
 
 ## Testing Environment Variables
 
@@ -1619,30 +1701,6 @@ Exit code 124 specifically indicates timeout (from `timeout` command). Other
 non-zero codes indicate subprocess errors. These warnings appear on stderr
 but do not block the hook from continuing.
 
-### Subprocess Timeout Configuration
-
-The subprocess runs with a 5-minute (300 second) timeout by default. This
-prevents runaway processes from blocking the hook indefinitely.
-
-**Configuration**:
-
-```bash
-# Override default 300 second timeout
-HOOK_SUBPROCESS_TIMEOUT=600 claude ...
-```
-
-The `timeout` command is used, which sends SIGTERM on expiration. Exit code
-124 indicates the timeout was reached.
-
-**macOS Dependency**: The `timeout` command requires GNU coreutils:
-
-```bash
-brew install coreutils
-```
-
-If `timeout` is not available, the subprocess runs without a timeout limit
-(graceful fallback).
-
 ### Path Normalization for Security Linters
 
 The `is_excluded_from_security_linters()` function normalizes absolute paths
@@ -1657,37 +1715,6 @@ Code for all hooks):
 
 This ensures exclusion patterns like `tests/*` work correctly regardless of
 whether the hook receives absolute or relative paths.
-
-### Settings File Auto-Creation
-
-The subprocess requires `~/.claude/no-hooks-settings.json` to prevent
-recursive hook invocation. If this file is missing, the hook auto-creates it:
-
-```json
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "disableAllHooks": true
-}
-```
-
-A warning is logged when auto-creation occurs:
-
-```text
-[hook:warning] created missing ~/.claude/no-hooks-settings.json
-```
-
-The settings file creation uses an atomic `mktemp+mv` pattern to handle
-concurrent hook invocations safely. If multiple hooks detect a missing file
-simultaneously:
-
-1. Each creates a unique temp file via `mktemp "${settings_file}.XXXXXX"`
-2. Each attempts `mv` to the final location
-3. First `mv` succeeds; others fail (file already exists)
-4. Failed processes clean up their temp files silently
-
-This follows ShellCheck SC2094 guidance: use `if mv ...; then success; else
-cleanup; fi` pattern instead of `mv ... || rm` to ensure the warning message
-only fires for the process that actually created the file.
 
 ## Integration Test Suite
 

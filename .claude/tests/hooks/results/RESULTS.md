@@ -75,19 +75,19 @@ Version skip (M28) → 1 record
 
 ## Failures
 
-### DEP14: no-hooks-settings.json — wrong path tested
+### DEP14: subprocess-settings.json — wrong path tested
 
-- **Expected**: `no-hooks-settings.json` exists with
+- **Expected**: `subprocess-settings.json` exists with
   `disableAllHooks: true`
-- **Actual**: dep-agent checked `.claude/no-hooks-settings.json`
-  (project-local), but the file lives at `~/.claude/no-hooks-settings.json`
+- **Actual**: dep-agent checked `.claude/subprocess-settings.json`
+  (project-local), but the file lives at `.claude/subprocess-settings.json`
   (user home directory). The file exists and is correct.
 - **Root cause**: Test specification ambiguity — DEP14 did not specify the
   full path. The hook code (`multi_linter.sh` line 370) references
-  `${HOME}/.claude/no-hooks-settings.json`.
+  `.claude/subprocess-settings.json`.
 - **Impact**: None — the file exists, subprocess prevention works.
-- **Action**: Update DEP14 test to check `~/.claude/no-hooks-settings.json`
-  instead of `.claude/no-hooks-settings.json` for future runs.
+- **Action**: Update DEP14 test to check `.claude/subprocess-settings.json`
+  instead of `.claude/subprocess-settings.json` for future runs.
 
 ### P28: live_trigger_pip (environment limitation)
 

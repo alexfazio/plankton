@@ -45,12 +45,6 @@ fi
 # --- Isolate HOME from real user home ---
 isolated_home="${tmp_dir}/home"
 mkdir -p "${isolated_home}/.claude"
-cat >"${isolated_home}/.claude/no-hooks-settings.json" <<'SETTINGS_EOF'
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "disableAllHooks": true
-}
-SETTINGS_EOF
 export HOME="${isolated_home}"
 
 # --- Helper: create a fake CLAUDE_PROJECT_DIR with config ---
@@ -59,6 +53,14 @@ setup_project_dir() {
   local config_content="$2"
   mkdir -p "${pd}/.claude/hooks"
   printf '%s\n' "${config_content}" >"${pd}/.claude/hooks/config.json"
+  # Create subprocess settings file (project-local)
+  cat >"${pd}/.claude/subprocess-settings.json" <<'SETTINGS_EOF'
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "disableAllHooks": true,
+  "skipDangerousModePermissionPrompt": true
+}
+SETTINGS_EOF
 }
 
 # --- Helper: create a shell file with ShellCheck violations ---

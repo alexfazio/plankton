@@ -295,10 +295,10 @@ session. PostToolUse hooks DO fire for teammate Edit/Write tool calls
 constraint, not a hook defect -- all 31 direct invocation tests confirm
 the hook logic is correct.
 
-**no-hooks-settings.json path**: The subprocess prevention settings file
-lives at `~/.claude/no-hooks-settings.json` (user home directory). The
+**subprocess-settings.json path**: The subprocess prevention settings file
+lives at `.claude/subprocess-settings.json` (user home directory). The
 integration test spec (DEP14) must check this path, not the project-local
-`.claude/no-hooks-settings.json`. The hook auto-creates this file if
+`.claude/subprocess-settings.json`. The hook auto-creates this file if
 missing (see [REFERENCE.md: Settings File Auto-Creation](../REFERENCE.md#settings-file-auto-creation)).
 
 **Stop hook untestable via TeamCreate**: The `stop_config_guardian.sh` hook

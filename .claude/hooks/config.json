@@ -51,12 +51,32 @@
     "subprocess_delegation": true
   },
   "subprocess": {
-    "timeout": 300,
-    "model_selection": {
-      "sonnet_patterns": "C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+|complexity|useExhaustiveDependencies|noFloatingPromises|useAwaitThenable|no-unsafe-argument|no-unsafe-assignment|no-unsafe-return|no-unsafe-call|no-unsafe-member-access|no-unsafe-type-assertion|no-unsafe-unary-minus|no-unsafe-enum-comparison|no-misused-promises|no-unnecessary-type-assertion|no-unnecessary-type-arguments|no-unnecessary-boolean-literal-compare|strict-boolean-expressions|await-thenable|no-unnecessary-condition|no-confusing-void-expression|no-base-to-string|no-redundant-type-constituents|no-duplicate-type-constituents|no-floating-promises|no-implied-eval|no-deprecated|no-for-in-array|no-misused-spread|no-array-delete|switch-exhaustiveness-check|unbound-method|return-await|only-throw-error|require-await|require-array-sort-compare|restrict-plus-operands|restrict-template-expressions|prefer-promise-reject-errors|promise-function-async",
-      "opus_patterns": "unresolved-attribute|type-assertion",
-      "volume_threshold": 5
-    }
+    "_comment": "Per-tier config for Phase 3 subprocess. Tiers: opus > sonnet > haiku. Unmatched patterns warn + fall back to haiku. Global overrides skip all tier selection.",
+    "tiers": {
+      "haiku": {
+        "patterns": "E[0-9]+|W[0-9]+|F[0-9]+|B[0-9]+|S[0-9]+|T[0-9]+|N[0-9]+|UP[0-9]+|YTT[0-9]+|ANN[0-9]+|BLE[0-9]+|FBT[0-9]+|A[0-9]+|COM[0-9]+|DTZ[0-9]+|EM[0-9]+|EXE[0-9]+|ISC[0-9]+|ICN[0-9]+|G[0-9]+|INP[0-9]+|PIE[0-9]+|PYI[0-9]+|PT[0-9]+|Q[0-9]+|RSE[0-9]+|RET[0-9]+|SLF[0-9]+|SIM[0-9]+|TID[0-9]+|TCH[0-9]+|INT[0-9]+|ARG[0-9]+|PTH[0-9]+|TD[0-9]+|FIX[0-9]+|ERA[0-9]+|PD[0-9]+|PGH[0-9]+|PLC[0-9]+|PLE[0-9]+|PLW[0-9]+|TRY[0-9]+|FLY[0-9]+|NPY[0-9]+|AIR[0-9]+|PERF[0-9]+|FURB[0-9]+|LOG[0-9]+|RUF[0-9]+|SC[0-9]+|DL[0-9]+|I[0-9]+",
+        "tools": "Edit,Read",
+        "max_turns": 10,
+        "timeout": 120
+      },
+      "sonnet": {
+        "patterns": "C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+|complexity|useExhaustiveDependencies|noFloatingPromises|useAwaitThenable|no-unsafe-argument|no-unsafe-assignment|no-unsafe-return|no-unsafe-call|no-unsafe-member-access|no-unsafe-type-assertion|no-unsafe-unary-minus|no-unsafe-enum-comparison|no-misused-promises|no-unnecessary-type-assertion|no-unnecessary-type-arguments|no-unnecessary-boolean-literal-compare|strict-boolean-expressions|await-thenable|no-unnecessary-condition|no-confusing-void-expression|no-base-to-string|no-redundant-type-constituents|no-duplicate-type-constituents|no-floating-promises|no-implied-eval|no-deprecated|no-for-in-array|no-misused-spread|no-array-delete|switch-exhaustiveness-check|unbound-method|return-await|only-throw-error|require-await|require-array-sort-compare|restrict-plus-operands|restrict-template-expressions|prefer-promise-reject-errors|promise-function-async",
+        "tools": "Edit,Read",
+        "max_turns": 10,
+        "timeout": 300
+      },
+      "opus": {
+        "patterns": "unresolved-attribute|type-assertion",
+        "tools": "Edit,Read,Write",
+        "max_turns": 15,
+        "timeout": 600
+      }
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
   },
   "jscpd": {
     "session_threshold": 3,

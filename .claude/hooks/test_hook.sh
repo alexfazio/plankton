@@ -300,12 +300,16 @@ def foo():
   },
   "phases": { "auto_format": true, "subprocess_delegation": true },
   "subprocess": {
-    "timeout": 300,
-    "model_selection": {
-      "sonnet_patterns": "C901|PLR[0-9]+|complexity|useExhaustiveDependencies|noExplicitAny",
-      "opus_patterns": "unresolved-attribute|type-assertion",
-      "volume_threshold": 5
-    }
+    "tiers": {
+      "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+      "sonnet": {"patterns": "C901|PLR[0-9]+|complexity|useExhaustiveDependencies|noExplicitAny", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+      "opus": {"patterns": "unresolved-attribute|type-assertion", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
   }
 }
 TS_CFG_EOF
@@ -583,10 +587,18 @@ console.log("none used");' \
     }
   },
   "phases": {"auto_format": true, "subprocess_delegation": true},
-  "subprocess": {"timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "x",
-    "volume_threshold": 5
-  }}
+  "subprocess": {
+    "tiers": {
+      "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+      "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+      "opus": {"patterns": "x", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
+  }
 }
 D3_CFG_EOF
     # biome.json enables the nursery rule so it would fire without --skip
@@ -662,10 +674,18 @@ D3_SRC_EOF
     }
   },
   "phases": { "auto_format": true, "subprocess_delegation": true },
-  "subprocess": { "timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "unresolved-attribute",
-    "volume_threshold": 5
-  }}
+  "subprocess": {
+    "tiers": {
+      "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+      "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+      "opus": {"patterns": "unresolved-attribute", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
+  }
 }
 NOBIOME_EOF
 

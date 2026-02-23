@@ -63,17 +63,72 @@ get_exclusions() {
   echo "${CONFIG_JSON}" | jaq -r ".exclusions // ${defaults} | .[]" 2>/dev/null
 }
 
-# Load model selection patterns from config (defaults from Incide)
+# Detect and reject old flat config format
+check_config_migration() {
+  local has_old_timeout has_old_model_selection
+  has_old_timeout=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.timeout // empty' 2>/dev/null) || true
+  has_old_model_selection=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.model_selection // empty' 2>/dev/null) || true
+  # Only error if old keys exist AND new tiers key does NOT exist
+  local has_tiers
+  has_tiers=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers // empty' 2>/dev/null) || true
+  if [[ -n "${has_old_timeout}" || -n "${has_old_model_selection}" ]] && [[ -z "${has_tiers}" ]]; then
+    echo "[hook:error] config.json uses deprecated flat subprocess format." >&2
+    echo "[hook:error] Migrate to subprocess.tiers structure. See docs/specs/subprocess-permission-gap.md" >&2
+    return 1
+  fi
+}
+
+# Load model selection patterns from config (tier-based or legacy defaults)
 load_model_patterns() {
+  local default_haiku='E[0-9]+|W[0-9]+|F[0-9]+|B[0-9]+|S[0-9]+|T[0-9]+|N[0-9]+|UP[0-9]+|YTT[0-9]+|ANN[0-9]+|BLE[0-9]+|FBT[0-9]+|A[0-9]+|COM[0-9]+|DTZ[0-9]+|EM[0-9]+|EXE[0-9]+|ISC[0-9]+|ICN[0-9]+|G[0-9]+|INP[0-9]+|PIE[0-9]+|PYI[0-9]+|PT[0-9]+|Q[0-9]+|RSE[0-9]+|RET[0-9]+|SLF[0-9]+|SIM[0-9]+|TID[0-9]+|TCH[0-9]+|INT[0-9]+|ARG[0-9]+|PTH[0-9]+|TD[0-9]+|FIX[0-9]+|ERA[0-9]+|PD[0-9]+|PGH[0-9]+|PLC[0-9]+|PLE[0-9]+|PLW[0-9]+|TRY[0-9]+|FLY[0-9]+|NPY[0-9]+|AIR[0-9]+|PERF[0-9]+|FURB[0-9]+|LOG[0-9]+|RUF[0-9]+|SC[0-9]+|DL[0-9]+|I[0-9]+'
   local default_sonnet='C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+'
   local default_opus='unresolved-attribute|type-assertion'
-  SONNET_CODE_PATTERN=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.model_selection.sonnet_patterns // empty' 2>/dev/null) || true
+
+  # Read from tiers structure (preferred) or fall back to defaults
+  HAIKU_CODE_PATTERN=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.haiku.patterns // empty' 2>/dev/null) || true
+  [[ -z "${HAIKU_CODE_PATTERN}" ]] && HAIKU_CODE_PATTERN="${default_haiku}"
+  SONNET_CODE_PATTERN=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.sonnet.patterns // empty' 2>/dev/null) || true
   [[ -z "${SONNET_CODE_PATTERN}" ]] && SONNET_CODE_PATTERN="${default_sonnet}"
-  OPUS_CODE_PATTERN=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.model_selection.opus_patterns // empty' 2>/dev/null) || true
+  OPUS_CODE_PATTERN=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.opus.patterns // empty' 2>/dev/null) || true
   [[ -z "${OPUS_CODE_PATTERN}" ]] && OPUS_CODE_PATTERN="${default_opus}"
-  VOLUME_THRESHOLD=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.model_selection.volume_threshold // empty' 2>/dev/null) || true
+
+  VOLUME_THRESHOLD=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.volume_threshold // empty' 2>/dev/null) || true
   [[ -z "${VOLUME_THRESHOLD}" ]] && VOLUME_THRESHOLD=5
-  readonly SONNET_CODE_PATTERN OPUS_CODE_PATTERN VOLUME_THRESHOLD
+
+  # Cross-tier overrides (env var takes precedence for timeout)
+  GLOBAL_MODEL_OVERRIDE=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.global_model_override // empty' 2>/dev/null) || true
+  MAX_TURNS_OVERRIDE=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.max_turns_override // empty' 2>/dev/null) || true
+  TIMEOUT_OVERRIDE=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.timeout_override // empty' 2>/dev/null) || true
+  [[ -n "${HOOK_SUBPROCESS_TIMEOUT:-}" ]] && TIMEOUT_OVERRIDE="${HOOK_SUBPROCESS_TIMEOUT}"
+
+  # Per-tier max_turns and timeout
+  HAIKU_MAX_TURNS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.haiku.max_turns // empty' 2>/dev/null) || true
+  [[ -z "${HAIKU_MAX_TURNS}" ]] && HAIKU_MAX_TURNS=10
+  SONNET_MAX_TURNS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.sonnet.max_turns // empty' 2>/dev/null) || true
+  [[ -z "${SONNET_MAX_TURNS}" ]] && SONNET_MAX_TURNS=10
+  OPUS_MAX_TURNS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.opus.max_turns // empty' 2>/dev/null) || true
+  [[ -z "${OPUS_MAX_TURNS}" ]] && OPUS_MAX_TURNS=15
+
+  HAIKU_TIMEOUT=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.haiku.timeout // empty' 2>/dev/null) || true
+  [[ -z "${HAIKU_TIMEOUT}" ]] && HAIKU_TIMEOUT=120
+  SONNET_TIMEOUT=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.sonnet.timeout // empty' 2>/dev/null) || true
+  [[ -z "${SONNET_TIMEOUT}" ]] && SONNET_TIMEOUT=300
+  OPUS_TIMEOUT=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.opus.timeout // empty' 2>/dev/null) || true
+  [[ -z "${OPUS_TIMEOUT}" ]] && OPUS_TIMEOUT=600
+
+  # Per-tier tool lists
+  HAIKU_TOOLS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.haiku.tools // empty' 2>/dev/null) || true
+  [[ -z "${HAIKU_TOOLS}" ]] && HAIKU_TOOLS="Edit,Read"
+  SONNET_TOOLS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.sonnet.tools // empty' 2>/dev/null) || true
+  [[ -z "${SONNET_TOOLS}" ]] && SONNET_TOOLS="Edit,Read"
+  OPUS_TOOLS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.opus.tools // empty' 2>/dev/null) || true
+  [[ -z "${OPUS_TOOLS}" ]] && OPUS_TOOLS="Edit,Read,Write"
+
+  readonly HAIKU_CODE_PATTERN SONNET_CODE_PATTERN OPUS_CODE_PATTERN VOLUME_THRESHOLD
+  readonly GLOBAL_MODEL_OVERRIDE MAX_TURNS_OVERRIDE TIMEOUT_OVERRIDE
+  readonly HAIKU_MAX_TURNS SONNET_MAX_TURNS OPUS_MAX_TURNS
+  readonly HAIKU_TIMEOUT SONNET_TIMEOUT OPUS_TIMEOUT
+  readonly HAIKU_TOOLS SONNET_TOOLS OPUS_TOOLS
 }
 
 # Check if auto-format phase is enabled (default: true)
@@ -168,6 +223,7 @@ load_config
 if [[ "$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null)" == "false" ]]; then
   exit 0
 fi
+check_config_migration || exit 0
 load_model_patterns
 
 # Read JSON input from stdin
@@ -182,10 +238,7 @@ collected_violations="[]"
 # File type for delegation
 file_type=""
 
-# Subprocess timeout: config.json -> env var -> 300s default
-_config_timeout=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.timeout // empty' 2>/dev/null) || true
-[[ -z "${_config_timeout}" ]] && _config_timeout=300
-readonly SUBPROCESS_TIMEOUT="${HOOK_SUBPROCESS_TIMEOUT:-${_config_timeout}}"
+# Note: HOOK_SUBPROCESS_TIMEOUT env var is handled inside load_model_patterns
 
 # Extract file path from tool_input
 file_path=$(jaq -r '.tool_input?.file_path? // empty' <<<"${input}" 2>/dev/null) || file_path=""
@@ -232,33 +285,79 @@ spawn_fix_subprocess() {
   local count
   count=$(echo "${violations_json}" | jaq 'length' 2>/dev/null || echo "0")
 
-  # Check for opus-level codes (complex type errors requiring architectural changes)
-  local has_opus_codes="false"
-  if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
-    has_opus_codes="true"
+  local model=""
+  local tier_max_turns=""
+  local tier_timeout=""
+  local tier_tools=""
+
+  # Global model override skips all tier selection
+  if [[ -n "${GLOBAL_MODEL_OVERRIDE}" ]]; then
+    model="${GLOBAL_MODEL_OVERRIDE}"
+  else
+    # Check for opus-level codes
+    local has_opus_codes="false"
+    if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+      has_opus_codes="true"
+    fi
+
+    # Check for sonnet-level codes
+    local has_sonnet_codes="false"
+    if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+      has_sonnet_codes="true"
+    fi
+
+    # Select model: haiku (default) -> sonnet -> opus (complex or >threshold)
+    model="haiku"
+    if [[ "${has_sonnet_codes}" == "true" ]]; then
+      model="sonnet"
+    fi
+    if [[ "${has_opus_codes}" == "true" ]] || [[ "${count}" -gt "${VOLUME_THRESHOLD}" ]]; then
+      model="opus"
+    fi
   fi
 
-  # Check for sonnet-level codes (refactoring, Pydantic, simple type errors)
-  # Also includes markdown (MD*) and docstrings (D*) - requires semantic understanding
-  local has_sonnet_codes="false"
-  if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
-    has_sonnet_codes="true"
+  # Warn about violation codes that don't match any tier pattern
+  if [[ "${model}" == "haiku" ]] && [[ -z "${GLOBAL_MODEL_OVERRIDE}" ]]; then
+    local unmatched_codes
+    unmatched_codes=$(echo "${violations_json}" | jaq -r '.[].code' 2>/dev/null | sort -u) || true
+    while IFS= read -r code; do
+      [[ -z "${code}" ]] && continue
+      local matched="false"
+      if echo "${code}" | grep -qE "^(${HAIKU_CODE_PATTERN})$" 2>/dev/null; then matched="true"; fi
+      if echo "${code}" | grep -qE "^(${SONNET_CODE_PATTERN})$" 2>/dev/null; then matched="true"; fi
+      if echo "${code}" | grep -qE "^(${OPUS_CODE_PATTERN})$" 2>/dev/null; then matched="true"; fi
+      if [[ "${matched}" == "false" ]]; then
+        echo "[hook:warning] unmatched pattern '${code}', defaulting to haiku" >&2
+      fi
+    done <<< "${unmatched_codes}"
   fi
 
-  # Select model: haiku (simple) -> sonnet (medium) -> opus (complex or >threshold violations)
-  # Volume threshold: > VOLUME_THRESHOLD triggers opus (default >5, i.e. 6+ violations)
-  local model="haiku"
-  if [[ "${has_sonnet_codes}" == "true" ]]; then
-    model="sonnet"
-  fi
-  if [[ "${has_opus_codes}" == "true" ]] || [[ "${count}" -gt "${VOLUME_THRESHOLD}" ]]; then
-    model="opus"
-  fi
+  # Resolve per-tier settings
+  case "${model}" in
+    opus)
+      tier_max_turns="${OPUS_MAX_TURNS}"
+      tier_timeout="${OPUS_TIMEOUT}"
+      tier_tools="${OPUS_TOOLS}"
+      ;;
+    sonnet)
+      tier_max_turns="${SONNET_MAX_TURNS}"
+      tier_timeout="${SONNET_TIMEOUT}"
+      tier_tools="${SONNET_TOOLS}"
+      ;;
+    *)
+      tier_max_turns="${HAIKU_MAX_TURNS}"
+      tier_timeout="${HAIKU_TIMEOUT}"
+      tier_tools="${HAIKU_TOOLS}"
+      ;;
+  esac
+
+  # Apply cross-tier overrides
+  [[ -n "${MAX_TURNS_OVERRIDE}" ]] && tier_max_turns="${MAX_TURNS_OVERRIDE}"
+  [[ -n "${TIMEOUT_OVERRIDE}" ]] && tier_timeout="${TIMEOUT_OVERRIDE}"
 
   # Debug output for testing model selection
-  # Usage: HOOK_DEBUG_MODEL=1 ./multi_linter.sh
   if [[ "${HOOK_DEBUG_MODEL:-}" == "1" ]]; then
-    echo "[hook:model] ${model} (count=${count}, opus_codes=${has_opus_codes}, sonnet_codes=${has_sonnet_codes})" >&2
+    echo "[hook:model] ${model} (count=${count}, opus_codes=${has_opus_codes:-n/a}, sonnet_codes=${has_sonnet_codes:-n/a})" >&2
   fi
 
   # Determine post-fix formatter command
@@ -366,12 +465,20 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
   fi
 
 
-  # Validate no-hooks settings file exists
-  local settings_file="${HOME}/.claude/no-hooks-settings.json"
+  # Resolve settings file: config override > project-local default
+  local settings_file
+  settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
+  # Expand leading tilde to $HOME
+  settings_file="${settings_file/#\~/$HOME}"
+  if [[ -z "${settings_file}" ]]; then
+    settings_file="${CLAUDE_PROJECT_DIR:-.}/.claude/subprocess-settings.json"
+  fi
+
+  # Auto-create if missing (atomic mktemp+mv for concurrent invocations)
   if [[ ! -f "${settings_file}" ]]; then
-    # Auto-create minimal settings file to prevent recursion
-    # Uses atomic mktemp+mv pattern to handle concurrent hook invocations
-    mkdir -p "${HOME}/.claude"
+    local settings_dir
+    settings_dir=$(dirname "${settings_file}")
+    mkdir -p "${settings_dir}"
     local tmpfile
     tmpfile=$(mktemp "${settings_file}.XXXXXX") || {
       echo "[hook:error] failed to create temp file for settings" >&2
@@ -380,7 +487,8 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
     cat > "${tmpfile}" << 'SETTINGS_EOF'
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "disableAllHooks": true
+  "disableAllHooks": true,
+  "skipDangerousModePermissionPrompt": true
 }
 SETTINGS_EOF
     if mv "${tmpfile}" "${settings_file}" 2>/dev/null; then
@@ -390,23 +498,77 @@ SETTINGS_EOF
     fi
   fi
   # Use timeout if available (requires GNU coreutils on macOS: brew install coreutils)
+  local effective_timeout="${tier_timeout}"
   local timeout_cmd=""
   if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd="timeout ${SUBPROCESS_TIMEOUT}"
+    timeout_cmd="timeout ${effective_timeout}"
   fi
 
-  # Spawn subprocess and capture exit code
-  # Design choice: Capture and log errors instead of silent || true per ShellCheck
-  # best practices (SC2155, SC2312). Logging provides visibility; hook continues
-  # regardless because subprocess failure is non-fatal (verification step follows).
-  # Use no-hooks settings to prevent recursive hook invocation
+  # Tool universe for --disallowedTools derivation (pinned to cc_tested_version)
+  # Update when upgrading cc_tested_version in config.json
+  local tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task"
+  local allowed_tools="${tier_tools}"
+
+  # Derive disallowed tools: universe minus allowed
+  local disallowed_tools=""
+  local IFS_BAK="${IFS}"
+  IFS=','
+  for tool in ${tool_universe}; do
+    local is_allowed="false"
+    for at in ${allowed_tools}; do
+      if [[ "${tool}" == "${at}" ]]; then
+        is_allowed="true"
+        break
+      fi
+    done
+    if [[ "${is_allowed}" == "false" ]]; then
+      if [[ -n "${disallowed_tools}" ]]; then
+        disallowed_tools="${disallowed_tools},${tool}"
+      else
+        disallowed_tools="${tool}"
+      fi
+    fi
+  done
+  IFS="${IFS_BAK}"
+
+  if [[ -z "${disallowed_tools}" ]]; then
+    echo "[hook:warning] all tools allowed for tier (disallowedTools is empty)" >&2
+  fi
+  # Log subprocess parameters for diagnostics
+  echo "[hook:subprocess] model=${model} tools=${allowed_tools} max_turns=${tier_max_turns} timeout=${effective_timeout}" >&2
+
+  # Capture file state before subprocess for modification detection
+  local file_hash_before=""
+  if [[ -f "${fp}" ]]; then
+    file_hash_before=$(cksum "${fp}" 2>/dev/null || true)
+  fi
+
+  # Spawn subprocess — stderr flows through for observability (visible via
+  # claude --debug), stdout discarded. Safety invariant: --dangerously-skip-permissions
+  # is never passed without --disallowedTools also being present.
+  local disallowed_flag=()
+  if [[ -n "${disallowed_tools}" ]]; then
+    disallowed_flag=(--disallowedTools "${disallowed_tools}")
+  fi
   ${timeout_cmd} "${claude_cmd}" -p "${prompt}" \
-    --settings "${HOME}/.claude/no-hooks-settings.json" \
-    --allowedTools "Edit,Read,Bash" \
-    --max-turns 10 \
+    --dangerously-skip-permissions \
+    --settings "${settings_file}" \
+    "${disallowed_flag[@]}" \
+    --max-turns "${tier_max_turns}" \
     --model "${model}" \
-    "${fp}" >/dev/null 2>&1
+    "${fp}" >/dev/null
   subprocess_exit=$?
+
+  # Detect file modification
+  local file_hash_after=""
+  if [[ -f "${fp}" ]]; then
+    file_hash_after=$(cksum "${fp}" 2>/dev/null || true)
+  fi
+  if [[ "${file_hash_before}" != "${file_hash_after}" ]]; then
+    echo "[hook:subprocess] file modified" >&2
+  else
+    echo "[hook:subprocess] file unchanged" >&2
+  fi
 
   # Report subprocess failures (but don't fail the hook)
   if [[ "${subprocess_exit}" -ne 0 ]]; then

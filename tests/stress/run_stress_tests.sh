@@ -230,12 +230,16 @@ create_ts_config() {
   ],
   "phases": { "auto_format": true, "subprocess_delegation": true },
   "subprocess": {
-    "timeout": 300,
-    "model_selection": {
-      "sonnet_patterns": "C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+|complexity|useExhaustiveDependencies|noExplicitAny",
-      "opus_patterns": "unresolved-attribute|type-assertion",
-      "volume_threshold": 5
-    }
+    "tiers": {
+      "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+      "sonnet": {"patterns": "C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+|complexity|useExhaustiveDependencies|noExplicitAny", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+      "opus": {"patterns": "unresolved-attribute|type-assertion", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+    },
+    "global_model_override": null,
+    "max_turns_override": null,
+    "timeout_override": null,
+    "volume_threshold": 5,
+    "settings_file": null
   }
 }
 TSCFG
@@ -275,9 +279,11 @@ create_disabled_lang_config() {
     "typescript": ${ts}
   },
   "phases": { "auto_format": true, "subprocess_delegation": true },
-  "subprocess": { "timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "x", "volume_threshold": 5
-  }}
+  "subprocess": { "tiers": {
+    "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+    "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+    "opus": {"patterns": "x", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+  }, "global_model_override": null, "max_turns_override": null, "timeout_override": null, "volume_threshold": 5, "settings_file": null}
 }
 DISABLECFG
   echo "${dir}"
@@ -298,9 +304,11 @@ create_phase_config() {
     "typescript": {"enabled": true, "js_runtime": "auto", "semgrep": false}
   },
   "phases": { "auto_format": ${value}, "subprocess_delegation": ${value} },
-  "subprocess": { "timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "x", "volume_threshold": 5
-  }}
+  "subprocess": { "tiers": {
+    "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+    "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+    "opus": {"patterns": "x", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+  }, "global_model_override": null, "max_turns_override": null, "timeout_override": null, "volume_threshold": 5, "settings_file": null}
 }
 PHASECFG
   echo "${dir}"
@@ -1431,9 +1439,11 @@ if ${HAS_BIOME}; then
     "typescript": {"enabled": true, "biome_nursery": "off", "semgrep": false}
   },
   "phases": {"auto_format": true, "subprocess_delegation": true},
-  "subprocess": {"timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "x", "volume_threshold": 5
-  }}
+  "subprocess": {"tiers": {
+    "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+    "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+    "opus": {"patterns": "x", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+  }, "global_model_override": null, "max_turns_override": null, "timeout_override": null, "volume_threshold": 5, "settings_file": null}
 }
 NURSOFF
   f="${d}/c11.ts"
@@ -1885,9 +1895,11 @@ if ${HAS_BIOME}; then
 {
   "languages": {"typescript": {"enabled": true, "js_runtime": "none", "semgrep": false}},
   "phases": {"auto_format": true, "subprocess_delegation": true},
-  "subprocess": {"timeout": 300, "model_selection": {
-    "sonnet_patterns": "C901", "opus_patterns": "x", "volume_threshold": 5
-  }}
+  "subprocess": {"tiers": {
+    "haiku": {"patterns": "SC[0-9]+|E[0-9]+|W[0-9]+|F[0-9]+", "tools": "Edit,Read", "max_turns": 10, "timeout": 120},
+    "sonnet": {"patterns": "C901", "tools": "Edit,Read", "max_turns": 10, "timeout": 300},
+    "opus": {"patterns": "x", "tools": "Edit,Read,Write", "max_turns": 15, "timeout": 600}
+  }, "global_model_override": null, "max_turns_override": null, "timeout_override": null, "volume_threshold": 5, "settings_file": null}
 }
 NOBCFG
   f="${d}/g7.ts"

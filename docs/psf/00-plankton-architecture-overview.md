@@ -286,7 +286,7 @@ graph TB
 
 - **Config immutability**: Two-layer defense prevents
   weakening linter rules (PreToolUse + Stop recovery)
-- **Subprocess isolation**: `no-hooks-settings.json`
+- **Subprocess isolation**: `subprocess-settings.json`
   disables hooks; output discarded (`>/dev/null 2>&1`)
 - **Security scanning**: Bandit + Semgrep detect common
   vulnerabilities; test paths excluded to reduce noise

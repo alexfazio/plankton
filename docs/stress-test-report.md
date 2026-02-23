@@ -1,6 +1,6 @@
 # Stress Test Report
 
-Generated: 2026-02-22T16:47:39Z
+Generated: 2026-02-23T17:16:40Z
 
 ## Summary
 
@@ -39,18 +39,18 @@ None.
 | 53 | B3: unresolved-attribute -> opus | ty not available in test context |
 | 62 | B12: ASYNC -> sonnet | flake8-async requires uv project |
 | 64 | B14: PYD -> sonnet | flake8-pydantic requires uv project |
-| 101 | E4: Guard file matching hash -> approve | PPID mismatch in subshell (ppid=64741) |
+| 101 | E4: Guard file matching hash -> approve | PPID mismatch in subshell (ppid=58168) |
 
 
 ## Performance
 
 | Test | Description | Actual | Limit |
 | ---- | ----------- | ------ | ----- |
-| H1 | Python clean | 1297ms | 2000ms |
-| H2 | Shell clean | 78ms | 2000ms |
-| H3 | YAML clean | 128ms | 2000ms |
-| H4 | Markdown clean | 358ms | 2000ms |
-| H5 | Biome 500-line | 1180ms | 2000ms |
+| H1 | Python clean | 1134ms | 2000ms |
+| H2 | Shell clean | 171ms | 2000ms |
+| H3 | YAML clean | 221ms | 2000ms |
+| H4 | Markdown clean | 466ms | 2000ms |
+| H5 | Biome 500-line | 1334ms | 2000ms |
 
 
 ## Recommendations

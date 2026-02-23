@@ -19,8 +19,8 @@
 ## Regressions (pass to fail)
 
 **DEP14_no_hooks**: pass in Run 1, **fail** in Run 2. The dep-agent
-checked `.claude/no-hooks-settings.json` (project-local) but the file
-lives at `~/.claude/no-hooks-settings.json` (user home). The file
+checked `.claude/subprocess-settings.json` (project-local) but the file
+lives at `.claude/subprocess-settings.json` (user home). The file
 exists and is correct — this is a test path bug, not a missing file.
 
 ## New Failures (not in Run 1)
@@ -66,7 +66,7 @@ fired successfully.
 | ---- | ----- | ----- | ------ |
 | semgrep | Present | Absent | Removed from environment |
 | bandit (DEP24) | Absent | Absent | No change |
-| no-hooks-settings | Present | N/A | Test path corrected |
+| subprocess-settings | Present | N/A | Test path corrected (migrated from legacy settings) |
 
 All other tools unchanged between runs.
 
@@ -87,8 +87,8 @@ learnings from Run 1 that were applied to Run 2 fixtures.
 
 ## Actionable Items
 
-1. **Fix DEP14 test path** — Check `~/.claude/no-hooks-settings.json`
-   (home dir) instead of `.claude/no-hooks-settings.json` (project).
+1. **Fix DEP14 test path** — Check `.claude/subprocess-settings.json`
+   (home dir) instead of `.claude/subprocess-settings.json` (project).
 2. **Standardize pm-agent test_name format** — Decide between
    `P01_pip_blocked` (Run 1) and `pip_blocked` (Run 2) for
    consistent cross-run comparison.
