@@ -2,75 +2,65 @@
 
 ![Plankton mascot](assets/plankton-cover.png)
 
-Real-time code quality enforcement for AI coding agents, built on Claude Code hooks.
-
-AI coding agents write fast but they don't follow your rules. Formatting
-drifts, naming conventions get ignored, dead code piles up as agents iterate
-and refactor, and stylistic choices you actually care about (quote style,
-import ordering, docstring format, complexity thresholds) get quietly
-overridden on every edit. You end up in this endless loop of copy-pasting
-pre-commit errors back into the agent, watching it fix half of them,
-committing again, getting more errors. It's maddening. And the worst part:
-agents will happily modify your linter configs to make violations disappear
-instead of fixing the code. The rules get weaker and nobody notices.
-
-Plankton enforces your standards programmatically at write-time, before
-commits and code review. The agent is
-blocked from proceeding until its output passes your checks. A three-phase
-system auto-formats first (fixing ~40-50% of issues silently), collects
-remaining violations as structured JSON via 20+ fast Rust-based linters, then
-delegates what's left to dedicated Claude instances that reason about each
-violation and produce targeted repairs. Model routing sends simple fixes to
-fast models and complex refactoring to capable ones, right-sizing intelligence
-to problem complexity so tokens aren't wasted. Covers Python, TypeScript/
-JS/CSS, Shell, YAML, Markdown, Dockerfile, TOML, and JSON — 8 languages, each
-with its own enforcement pipeline.
-
-Agentic coding created a [new programmable
-layer](https://x.com/karpathy/status/2004607146781278521): agents, hooks,
-MCP, permissions, tools. Everyone's still figuring out how to hold it.
-Plankton is the enforcement dimension of that layer.
-
-Like the organism: tiny, everywhere, filtering everything.
+Write-time code quality enforcement for AI coding agents, built on Claude Code hooks.
 
 > [!CAUTION]
 > Research project under active development. Hooks are tested against
 > Claude Code >= 2.1.50 (see badge). Newer CC versions usually work
 > but are not guaranteed. **Disable CC auto-updates** to prevent
 > silent breakage (see Quick Start). If you encounter issues, file a
-> report including the output of `claude --version`.
+> report including the output of `claude --version`. To pin to a
+> specific Plankton version: `git checkout v0.1.0`.
 
 ## quick start
 
-1. **Disable Claude Code auto-updates** (recommended). Plankton depends on
-   undocumented CC internals — a silent auto-update can break hooks without
-   warning. Pick one:
+```bash
+git clone https://github.com/alexfazio/plankton.git
+cd plankton
+pip install uv && uv sync --all-extras
+claude                # hooks activate automatically
+```
 
-   ```bash
-   # Option A: disable auto-updates entirely (most reliable)
-   echo 'export DISABLE_AUTOUPDATER=1' >> ~/.zshrc && source ~/.zshrc
+That's it. Plankton works by being the directory you run Claude Code from.
+The hooks in `.claude/hooks/` are picked up automatically — no install
+command, no plugin, no config. Clone, cd, claude.
 
-   # Option B: use the stable channel (~1 week behind latest, fewer regressions)
-   curl -fsSL https://claude.ai/install.sh | bash -s stable
-   ```
+> [!TIP]
+> You can work on any codebase from inside plankton. Just tell Claude:
+> *"work on /path/to/my-project"* — it will apply the same quality
+> enforcement to that codebase while the hooks stay active.
 
-   Check your current version: `claude --version`
+> [!NOTE]
+> **Existing codebases:** the agent edits a file, Plankton enforces every
+> violation in it, pre-existing included. Messy files get cleaned up on first
+> touch. After that, they're fast. Scope it down with exclusions:
+>
+> ```json
+> "exclusions": ["tests/", "legacy/", "vendor/", "node_modules/"]
+> ```
 
-   Tested with Claude Code >= 2.1.50.
+**Recommended: disable Claude Code auto-updates.** Plankton depends on
+undocumented CC internals — a silent auto-update can break hooks without
+warning.
 
-2. **Clone the repository**:
+```bash
+# Option A: disable auto-updates entirely (most reliable)
+echo 'export DISABLE_AUTOUPDATER=1' >> ~/.zshrc && source ~/.zshrc
 
-   ```bash
-   git clone https://github.com/alexfazio/plankton.git
-   cd plankton
-   ```
+# Option B: use the stable channel (~1 week behind latest, fewer regressions)
+curl -fsSL https://claude.ai/install.sh | bash -s stable
+```
 
-3. **Install dependencies**:
+`jaq`, `ruff`, and `uv` are required for all languages. TypeScript also
+needs `biome`. Everything else is optional and gracefully skipped if not
+installed. See [docs/SETUP.md](docs/SETUP.md) for per-language setup.
 
-   ```bash
-   pip install uv
-   uv sync --all-extras
-   ```
+## what is plankton
+
+Code quality gate enforcement at write-time, using Claude Code hooks. The
+agent is blocked from proceeding until its output passes your checks —
+style, types, security, complexity — all enforced before commits and code
+review.
 
 3. **Run the Setup Wizard**:
 
@@ -81,10 +71,16 @@ Like the organism: tiny, everywhere, filtering everything.
    This will auto-detect your project languages, check for installed tools, and generate your configuration.
 
 4. **Start a Claude Code session**. Hooks activate automatically.
+- **Higher pass rate** — write-time feedback catches bugs, type errors,
+  and anti-patterns that would otherwise cause test failures.
+- **Behavioral shift** — with Plankton active, the model learns from
+  write-time feedback and produces better code *during* generation,
+  not just through post-hoc formatting.
+- **Compound quality** — improvements across multiple dimensions
+  compound into code that is more likely to be functionally correct.
 
-Only `jaq` and `ruff` are required. Everything else is optional and
-gracefully skipped if not installed. See [docs/SETUP.md](docs/SETUP.md)
-for per-language installation and configuration.
+For the full motivation and design story, read the
+[original writeup](https://x.com/alxfazio/status/2024931367612743688).
 
 ## verify
 
@@ -98,42 +94,16 @@ uv run pre-commit install
 
 ## how it works
 
-I built Plankton because I was tired of the copy-paste loop. You tell the
-agent your rules, it ignores half of them, you commit, pre-commit hooks catch
-15 violations, you paste them back in, the agent fixes 12, you commit again, 3
-more appear. Round and round. Worse, I noticed agents exhibit rule-gaming
-behavior: instead of fixing code, they quietly modify your `.ruff.toml` or
-`biome.json` to make violations disappear. The rules get weaker and nobody
-notices. I wanted something that enforced quality as a structural constraint,
-not a suggestion.
-
-The system runs in three phases. Phase 1 auto-formats silently: ruff, shfmt,
-biome, taplo, markdownlint — fixing formatting issues before anyone sees them.
-Phase 2 collects remaining violations as structured JSON with line numbers,
-column positions, and violation codes from every configured linter. Phase 3
-delegates those violations to a dedicated Claude subprocess that reasons about
-each fix, applies targeted edits, then the hook re-runs Phase 1 and 2 to
-verify the result. If violations remain, they're escalated to the main agent
-with full context.
-
-Config protection is non-negotiable. A PreToolUse hook blocks edits
-to all 14+ linter config files before they happen, and a Stop hook
-uses git diff to catch anything that slipped through at session end.
-
-Model routing picks the right size of intelligence for each problem: haiku for
-simple unused-variable deletions (~5s), sonnet for complexity refactoring and
-docstring rewrites (~15s), opus when there are 5+ violations or architectural
-type errors (~25s). Tokens aren't wasted on easy fixes; hard problems get the
-reasoning they need.
-
-The Boy Scout Rule ties it together: edit a file, own all its
-violations, pre-existing or not. No exceptions. Like reinforcement
-learning signals, these
-corrections shape how the agent writes code, actively preventing bad patterns
-rather than cleaning up after the fact.
+Three phases run on every file edit: auto-format first (ruff, shfmt, biome,
+taplo, markdownlint), then collect remaining violations as structured JSON from
+20+ linters, then delegate what's left to dedicated Claude subprocesses that
+reason about each fix. Config files are tamper-proof — a PreToolUse hook blocks
+linter config edits before they happen. Model routing right-sizes intelligence
+to problem complexity so tokens aren't wasted on easy fixes.
 
 See [docs/REFERENCE.md](docs/REFERENCE.md) for the full architecture, message
-flows, and configuration reference.
+flows, and configuration reference. For the motivation and design story, read
+the [original writeup](https://x.com/alxfazio/status/2024931367612743688).
 
 ## what it enforces
 
