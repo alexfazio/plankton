@@ -1095,6 +1095,7 @@ PM_OFF_JS_EOF
 
   # Test: no direct collected_violations jaq merge assignments
   local unprotected_merges
+  # shellcheck disable=SC2016  # intentional literal grep pattern
   unprotected_merges=$(grep -c 'collected_violations=$(echo "${collected_violations}"' \
     "${script_dir}/multi_linter.sh" || true)
   if [[ "${unprotected_merges}" -eq 0 ]]; then
@@ -1106,6 +1107,7 @@ PM_OFF_JS_EOF
   fi
 
   local guarded_merges
+  # shellcheck disable=SC2016  # intentional literal grep pattern
   guarded_merges=$(grep -c '_merged=$(echo "${collected_violations}"' \
     "${script_dir}/multi_linter.sh" || true)
   if [[ "${guarded_merges}" -ge 13 ]]; then
@@ -1208,6 +1210,7 @@ def foo():
 
   # Unified schema: Python ruff violations must have line/column keys
   # (not raw location.row/location.column from ruff JSON)
+  # shellcheck disable=SC2329  # invoked indirectly as callback
   _check_ruff_unified() {
     local stderr="$1" exit_code="$2"
     [[ "${exit_code}" -ne 2 ]] && return 1
@@ -1238,6 +1241,7 @@ def foo():
     _check_ruff_unified
 
   # Feedback JSON: Shell (SC2034 + SC2154 + SC2086)
+  # shellcheck disable=SC2016  # intentional fixture content
   test_stderr_json "feedback_json_shell" \
     "${temp_dir}/feedback_test.sh" \
     '#!/bin/bash
@@ -1304,6 +1308,7 @@ key = "value"' \
       "${script_dir}/multi_linter.sh" 2>&1 >/dev/null)
     local md_exit=$?
     set -e
+    # shellcheck disable=SC2310  # intentional: checking exit in if
     if _check_hook_json "${md_stderr}" "${md_exit}"; then
       echo "PASS feedback_json_markdown"
       passed=$((passed + 1))
@@ -1342,6 +1347,7 @@ console.log("test");' >"${ts_feedback_file}"
       "${script_dir}/multi_linter.sh" 2>&1 >/dev/null)
     local ts_exit=$?
     set -e
+    # shellcheck disable=SC2310  # intentional: checking exit in if
     if _check_hook_json "${ts_stderr}" "${ts_exit}"; then
       echo "PASS feedback_json_typescript"
       passed=$((passed + 1))
@@ -1379,6 +1385,36 @@ console.log("test");' >"${ts_feedback_file}"
   else
     echo "FAIL feedback_count_shell: ${shell_count} violations (expected >= 2)"
     failed=$((failed + 1))
+  fi
+
+  echo ""
+  echo "--- ShellCheck Compliance Tests ---"
+
+  # Test: all hook scripts pass shellcheck
+  if command -v shellcheck >/dev/null 2>&1; then
+    local sc_ok=true
+    for sc_file in "${script_dir}/multi_linter.sh" \
+                   "${script_dir}/protect_linter_configs.sh" \
+                   "${script_dir}/enforce_package_managers.sh" \
+                   "${script_dir}/stop_config_guardian.sh" \
+                   "${script_dir}/approve_configs.sh" \
+                   "${script_dir}/test_hook.sh" \
+                   "${script_dir}/../tests/hooks/test_subprocess_permissions.sh"; do
+      if [[ -f "${sc_file}" ]]; then
+        # shellcheck disable=SC2310  # intentional: checking in if
+        if ! shellcheck "${sc_file}" >/dev/null 2>&1; then
+          echo "FAIL shellcheck_compliance: $(basename "${sc_file}")"
+          sc_ok=false
+          failed=$((failed + 1))
+        fi
+      fi
+    done
+    if [[ "${sc_ok}" == "true" ]]; then
+      echo "PASS shellcheck_compliance: all hook scripts clean"
+      passed=$((passed + 1))
+    fi
+  else
+    echo "SKIP shellcheck_compliance: shellcheck not installed"
   fi
 
   # Summary

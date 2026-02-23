@@ -38,7 +38,7 @@ load_protected_files_from_config() {
       [[ -z "${_pf}" ]] && continue
       PROTECTED_FILES+=("${_pf}")
     done < <(
-      jaq -r '.protected_files // [] | .[]' "${config_file}" 2>/dev/null
+      jaq -r '.protected_files // [] | .[]' "${config_file}" 2>/dev/null || true
     )
   fi
   if [[ ${#PROTECTED_FILES[@]} -eq 0 ]]; then

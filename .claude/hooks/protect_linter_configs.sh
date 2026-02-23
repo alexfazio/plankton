@@ -1,5 +1,6 @@
 #!/bin/bash
 # protect_linter_configs.sh - Claude Code PreToolUse hook
+# shellcheck disable=SC2310  # functions in if/|| is intentional
 # Blocks modification of linter configuration files (defense layer 4)
 #
 # Protected files define code quality standards. Modifying them to make
@@ -70,7 +71,7 @@ is_protected_config() {
     if [[ "${check_basename}" == "${protected_file}" ]]; then
       return 0
     fi
-  done < <(load_protected_files)
+  done < <(load_protected_files || true)
   return 1
 }
 

@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2310  # functions in if/|| is intentional throughout
 # multi_linter.sh - Claude Code PostToolUse hook for multi-language linting
 # Supports: Python (ruff+ty+flake8-pydantic+flake8-async), Shell (shellcheck+shfmt),
 #           YAML (yamllint), JSON (jaq/biome), Dockerfile (hadolint),
@@ -191,6 +192,7 @@ detect_biome() {
       npm) biome_cmd="npx biome" ;;
       pnpm) biome_cmd="pnpm exec biome" ;;
       bun) biome_cmd="bunx biome" ;;
+      *) echo "[hook:warning] unknown js_runtime: ${js_runtime}" >&2 ;;
     esac
   else
     # Auto-detect: project-local -> PATH -> npx -> pnpm -> bunx
@@ -220,7 +222,7 @@ detect_biome() {
 load_config
 
 # Master kill switch: hook_enabled=false in config.json disables all linting
-if [[ "$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null)" == "false" ]]; then
+if [[ "$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null || true)" == "false" ]]; then
   exit 0
 fi
 check_config_migration || exit 0
@@ -267,7 +269,7 @@ is_excluded_from_security_linters() {
     if [[ "${fp}" == ${exclusion}* ]]; then
       return 0
     fi
-  done < <(get_exclusions)
+  done < <(get_exclusions || true)
   return 1
 }
 
@@ -469,7 +471,7 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
   local settings_file
   settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
   # Expand leading tilde to $HOME
-  settings_file="${settings_file/#\~/$HOME}"
+  settings_file="${settings_file/#\~/${HOME}}"
   if [[ -z "${settings_file}" ]]; then
     settings_file="${CLAUDE_PROJECT_DIR:-.}/.claude/subprocess-settings.json"
   fi
@@ -910,6 +912,7 @@ handle_typescript() {
       _handle_semgrep_session "${fp}"
       return
       ;;
+    *) echo "[hook:warning] unhandled ext in vue check: ${ext}" >&2 ;;
   esac
 
   # Biome required for non-SFC TS/JS/CSS files

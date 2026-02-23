@@ -1747,6 +1747,28 @@ test (Step 2) has not yet been executed.
 See [posttooluse-issue/](specs/posttooluse-issue/) for investigation
 details and the executable plan (`make-plankton-work.md`).
 
+### ShellCheck Info-Level Compliance (pre-commit)
+
+All hook scripts pass `shellcheck` with `enable=all` (maximum
+enforcement via `.shellcheckrc`). Info-level findings are
+handled as follows:
+
+- **SC2016** (single-quote expressions): Suppressed inline
+  where strings are intentional literal patterns (grep
+  searches, test fixtures)
+- **SC2310** (function in if-condition): Suppressed inline
+  where exit status capture is intentional
+- **SC2312** (masked return value): Fixed with `|| true`
+  in process substitutions and command substitutions
+- **SC2249** (missing default case): Fixed by adding
+  default `*)` case with warning message
+- **SC2329** (unused function): Suppressed inline for
+  functions invoked indirectly as callbacks
+
+These changes improve robustness without altering hook
+behavior. The SC2249 default case adds a stderr warning
+for unknown `js_runtime` values (previously silent no-op).
+
 ---
 
 ## References
