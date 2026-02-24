@@ -6,10 +6,10 @@ Generated: 2026-02-23T17:16:40Z
 
 | Metric | Count |
 | ------ | ----- |
-| Total  | 133 |
-| Pass   | 125 |
-| Fail   | 0 |
-| Skip   | 8 |
+| Total  | 133   |
+| Pass   | 125   |
+| Fail   | 0     |
+| Skip   | 8     |
 
 ## Per-Category Breakdown
 
@@ -39,8 +39,7 @@ None.
 | 53 | B3: unresolved-attribute -> opus | ty not available in test context |
 | 62 | B12: ASYNC -> sonnet | flake8-async requires uv project |
 | 64 | B14: PYD -> sonnet | flake8-pydantic requires uv project |
-| 101 | E4: Guard file matching hash -> approve | PPID mismatch in subshell (ppid=58168) |
-
+| 101 | E4: Guard file matching hash -> approve | PPID mismatch in subshell |
 
 ## Performance
 
@@ -51,7 +50,6 @@ None.
 | H3 | YAML clean | 221ms | 2000ms |
 | H4 | Markdown clean | 466ms | 2000ms |
 | H5 | Biome 500-line | 1334ms | 2000ms |
-
 
 ## Recommendations
 

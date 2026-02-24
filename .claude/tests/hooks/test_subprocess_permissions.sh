@@ -63,6 +63,7 @@ SETTINGS_EOF
 # --- Helper: create shell file with ShellCheck violations ---
 create_bad_shell_file() {
   local fp="$1"
+  # shellcheck disable=SC2016  # intentional: test fixture with literal $y
   printf '#!/bin/bash\nunused="x"\necho $y\n' >"${fp}"
 }
 

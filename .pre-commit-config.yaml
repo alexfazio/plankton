@@ -50,13 +50,34 @@ repos:
         exclude: ^(scripts/|docs/|tests/)
         require_serial: true
 
-      # === PHASE 4: SHELL ===
+  # === PHASE 4: SHELL (pinned binary — consistent across macOS/Linux) ===
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
       - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
-        language: system
         types: [shell]
 
+  # === PHASE 7: TOML (pinned binary via pip) ===
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-lint
+
+  # === PHASE 8b: ACTIONLINT (pinned binary) ===
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.11
+    hooks:
+      - id: actionlint
+
+  # === PHASE 9: MARKDOWN (pinned via npm) ===
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.21.0
+    hooks:
+      - id: markdownlint-cli2
+        pass_filenames: false
+
+  - repo: local
+    hooks:
       # === PHASE 5: YAML ===
       - id: yamllint
         name: yamllint
@@ -67,21 +88,14 @@ repos:
       # === PHASE 6: JSON ===
       - id: check-json
         name: jaq (json syntax)
-        entry: bash -c 'for f in "$@"; do jaq empty "$f" || exit 1; done' --
+        entry: bash -c 'command -v jaq >/dev/null 2>&1 || exit 0; for f in "$@"; do jaq empty "$f" || exit 1; done' --
         language: system
         types: [json]
-
-      # === PHASE 7: TOML ===
-      - id: taplo-check
-        name: taplo (toml)
-        entry: taplo check
-        language: system
-        types: [toml]
 
       # === PHASE 8: DOCKERFILE ===
       - id: hadolint
         name: hadolint
-        entry: hadolint
+        entry: bash -c 'command -v hadolint >/dev/null 2>&1 || exit 0; hadolint "$@"' --
         language: system
         files: (^|/)Dockerfile(\..*)?$|\.dockerfile$
 
@@ -91,21 +105,6 @@ repos:
         entry: uv run check-jsonschema --builtin-schema github-workflows
         language: system
         files: ^\.github/workflows/.*\.ya?ml$
-
-      # === PHASE 8b: ACTIONLINT ===
-      - id: actionlint
-        name: actionlint
-        entry: actionlint
-        language: system
-        files: ^\.github/workflows/.*\.ya?ml$
-
-      # === PHASE 9: MARKDOWN ===
-      - id: markdownlint
-        name: markdownlint
-        entry: markdownlint-cli2
-        language: system
-        pass_filenames: false
-        verbose: true
 
       # === PHASE 10: DUPLICATES ===
       - id: jscpd

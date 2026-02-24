@@ -9,6 +9,8 @@ read_test_process.csv
 PLAN.md
 .claude/tests/hooks/results/.start_ts
 .claude/tests/hooks/results/archive/
+benchmark/
 reports/
 assets/internal/
 docs/internal/
+docs/specs/

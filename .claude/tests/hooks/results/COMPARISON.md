@@ -62,11 +62,13 @@ fired successfully.
 
 ## Environment Delta
 
+<!-- markdownlint-disable MD013 -->
 | Tool | Run 1 | Run 2 | Change |
 | ---- | ----- | ----- | ------ |
 | semgrep | Present | Absent | Removed from environment |
 | bandit (DEP24) | Absent | Absent | No change |
 | subprocess-settings | Present | N/A | Test path corrected (migrated from legacy settings) |
+<!-- markdownlint-enable MD013 -->
 
 All other tools unchanged between runs.
 

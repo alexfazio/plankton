@@ -1,6 +1,6 @@
-![Plankton mascot](assets/plankton-cover.png)
-
 # plankton
+
+![Plankton mascot](assets/plankton-cover.png)
 
 Write-time code quality enforcement for AI coding agents, built on Claude Code hooks.
 
@@ -29,6 +29,8 @@ command, no plugin, no config. Clone, cd, claude.
 > You can work on any codebase from inside plankton. Just tell Claude:
 > *"work on /path/to/my-project"* — it will apply the same quality
 > enforcement to that codebase while the hooks stay active.
+
+<!-- -->
 
 > [!NOTE]
 > **Existing codebases:** the agent edits a file, Plankton enforces every

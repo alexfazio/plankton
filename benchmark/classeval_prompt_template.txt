@@ -1,3 +1,0 @@
-Edit solution.py to implement all methods in the class.
-Replace each pass/... with the correct implementation.
-Do not add tests or change the class structure.

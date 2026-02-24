@@ -1,9 +1,0 @@
-{
-  "claude_code_version": "2.1.50 (Claude Code)",
-  "model": "claude-haiku-4-5-20251001",
-  "task_count": 20,
-  "mini": false,
-  "timeout": 300,
-  "start_time": "2026-02-23T00:42:14+0100",
-  "end_time": "2026-02-23T01:36:47+0100"
-}

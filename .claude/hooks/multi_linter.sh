@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2310  # functions in if/|| is intentional throughout
 # multi_linter.sh - Claude Code PostToolUse hook for multi-language linting
 # Supports: Python (ruff+ty+flake8-pydantic+flake8-async), Shell (shellcheck+shfmt),
 #           YAML (yamllint), JSON (jaq/biome), Dockerfile (hadolint),
@@ -477,7 +478,7 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
   local settings_file
   settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
   # Expand leading tilde to $HOME
-  settings_file="${settings_file/#\~/$HOME}"
+  settings_file="${settings_file/#\~/${HOME}}"
   if [[ -z "${settings_file}" ]]; then
     settings_file="${CLAUDE_PROJECT_DIR:-.}/.claude/subprocess-settings.json"
   fi
