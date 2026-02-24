@@ -1,6 +1,25 @@
 # setup
 
-An install wizard is planned; for now, follow these steps.
+The easiest way to set up Plankton is using the **Interactive Setup Wizard**.
+
+## interactive setup
+
+Execute this command in your project root:
+
+```bash
+uv run --no-project scripts/setup.py
+```
+
+The wizard will:
+
+1. **Check Dependencies**: Verify `jaq`, `ruff`, and `uv` are installed.
+2. **Detect Languages**: Scan your project for Python, TypeScript, Docker, etc.
+3. **Configure Hooks**: Interactively enable/disable language enforcement.
+4. **Finalize Environment**: Generate `.claude/hooks/config.json` and ensure hook scripts are executable.
+
+## manual setup
+
+If you prefer manual setup, follow these steps.
 
 ## core dependencies
 

@@ -64,6 +64,15 @@ agent is blocked from proceeding until its output passes your checks —
 style, types, security, complexity — all enforced before commits and code
 review.
 
+3. **Run the Setup Wizard**:
+
+   ```bash
+   uv run --no-project scripts/setup.py
+   ```
+
+   This will auto-detect your project languages, check for installed tools, and generate your configuration.
+
+4. **Start a Claude Code session**. Hooks activate automatically.
 - **Higher pass rate** — write-time feedback catches bugs, type errors,
   and anti-patterns that would otherwise cause test failures.
 - **Behavioral shift** — with Plankton active, the model learns from
@@ -141,7 +150,7 @@ agents modify linting rules, and more.
 
 ## todos
 
-- should have an install wizard instead of manual setup, a guided script that
+- [x] should have an install wizard instead of manual setup, a guided script that
   detects your stack and configures everything
 - one-click install via Claude Code marketplace would be nice
 - a Claude Code skill for configuration and troubleshooting from inside a

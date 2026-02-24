@@ -87,7 +87,7 @@ SESSION_FILES=(
   "/tmp/stop_hook_approved_$$.json"
 )
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 cleanup() {
   rm -rf "${TEMP_DIR}"
   for f in "${SESSION_FILES[@]}"; do

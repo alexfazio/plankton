@@ -1,1 +1,1 @@
-"""Plankton source package."""
+"""Plankton package."""

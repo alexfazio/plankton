@@ -694,6 +694,7 @@ many issues silently:
 
 | File | Description |
 | --- | --- |
+| `scripts/setup.py` | Interactive setup wizard - configures Plankton for your project |
 | `multi_linter.sh` | PostToolUse hook - lints edited files |
 | `protect_linter_configs.sh` | PreToolUse hook - blocks config & hook edits |
 | `enforce_package_managers.sh` | PreToolUse - blocks legacy package managers |
@@ -843,6 +844,7 @@ If the file is missing, all features are enabled with sensible defaults.
 
 | Key | Type | Default | Purpose |
 | --- | ---- | ------- | ------- |
+| `hook_enabled` | bool | true | Master kill switch for all hook logic |
 | `languages.<type>` | bool | true | Per-language on/off toggle |
 | `languages.typescript` | object | — | TS/JS/CSS config (sub-options below) |
 | `…typescript.enabled` | bool | false | Enable TS/JS/CSS linting |

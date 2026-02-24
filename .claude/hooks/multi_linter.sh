@@ -192,7 +192,7 @@ detect_biome() {
       npm) biome_cmd="npx biome" ;;
       pnpm) biome_cmd="pnpm exec biome" ;;
       bun) biome_cmd="bunx biome" ;;
-      *) echo "[hook:warning] unknown js_runtime: ${js_runtime}" >&2 ;;
+      *) ;;
     esac
   else
     # Auto-detect: project-local -> PATH -> npx -> pnpm -> bunx
@@ -222,7 +222,8 @@ detect_biome() {
 load_config
 
 # Master kill switch: hook_enabled=false in config.json disables all linting
-if [[ "$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null || true)" == "false" ]]; then
+_hook_enabled=$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null)
+if [[ "${_hook_enabled}" == "false" ]]; then
   exit 0
 fi
 check_config_migration || exit 0
@@ -264,12 +265,14 @@ is_excluded_from_security_linters() {
   fi
 
   local exclusion
+  local exclusions
+  exclusions=$(get_exclusions)
   while IFS= read -r exclusion; do
     [[ -z "${exclusion}" ]] && continue
     if [[ "${fp}" == ${exclusion}* ]]; then
       return 0
     fi
-  done < <(get_exclusions || true)
+  done <<<"${exclusions}"
   return 1
 }
 
@@ -371,7 +374,11 @@ spawn_fix_subprocess() {
     markdown) format_cmd="markdownlint-cli2 --no-globs --fix '${fp}'" ;;
     typescript)
       local _biome_cmd
-      _biome_cmd=$(detect_biome 2>/dev/null) || _biome_cmd=""
+      detect_biome >/dev/null 2>&1; biome_ret=$?
+      _biome_cmd=""
+      if [[ ${biome_ret} -eq 0 ]]; then
+        _biome_cmd=$(detect_biome 2>/dev/null)
+      fi
       if [[ -n "${_biome_cmd}" ]]; then
         format_cmd="${_biome_cmd} format --write '${fp}'"
       fi
@@ -614,9 +621,14 @@ rerun_phase1() {
       # Use Biome if TS enabled and available (D6), fallback to jaq pretty-print
       if jaq empty "${fp}" 2>/dev/null; then
         local json_done=false
-        if is_typescript_enabled; then
+        is_typescript_enabled; ts_enabled=$?
+        if [[ ${ts_enabled} -eq 0 ]]; then
           local _biome_cmd
-          _biome_cmd=$(detect_biome 2>/dev/null) || _biome_cmd=""
+          detect_biome >/dev/null 2>&1; biome_ret=$?
+          _biome_cmd=""
+          if [[ ${biome_ret} -eq 0 ]]; then
+            _biome_cmd=$(detect_biome 2>/dev/null)
+          fi
           if [[ -n "${_biome_cmd}" ]]; then
             ${_biome_cmd} format --write "${fp}" >/dev/null 2>&1 && json_done=true
           fi
@@ -638,16 +650,22 @@ rerun_phase1() {
       ;;
     typescript)
       local _biome_cmd
-      _biome_cmd=$(detect_biome 2>/dev/null) || _biome_cmd=""
+      detect_biome >/dev/null 2>&1; biome_ret=$?
+      _biome_cmd=""
+      if [[ ${biome_ret} -eq 0 ]]; then
+        _biome_cmd=$(detect_biome 2>/dev/null)
+      fi
       if [[ -n "${_biome_cmd}" ]]; then
         local _unsafe_flag=""
         local _unsafe
         _unsafe=$(get_ts_config "biome_unsafe_autofix" "false")
         [[ "${_unsafe}" == "true" ]] && _unsafe_flag="--unsafe"
+        local rel_path
+        rel_path=$(_biome_relpath "${fp}")
         if [[ -n "${_unsafe_flag}" ]]; then
-          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "${_unsafe_flag}" "$(_biome_relpath "${fp}")") >/dev/null 2>&1 || true
+          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "${_unsafe_flag}" "${rel_path}") >/dev/null 2>&1 || true
         else
-          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "$(_biome_relpath "${fp}")") >/dev/null 2>&1 || true
+          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
         fi
       fi
       ;;
@@ -764,10 +782,16 @@ rerun_phase2() {
       ;;
     typescript)
       local _biome_cmd
-      _biome_cmd=$(detect_biome 2>/dev/null) || _biome_cmd=""
+      detect_biome >/dev/null 2>&1; biome_ret=$?
+      _biome_cmd=""
+      if [[ ${biome_ret} -eq 0 ]]; then
+        _biome_cmd=$(detect_biome 2>/dev/null)
+      fi
       if [[ -n "${_biome_cmd}" ]]; then
         local biome_out
-        biome_out=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} lint --reporter=json "$(_biome_relpath "${fp}")") 2>/dev/null || true)
+        local rel_path
+        rel_path=$(_biome_relpath "${fp}")
+        biome_out=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} lint --reporter=json "${rel_path}") 2>/dev/null || true)
         if [[ -n "${biome_out}" ]]; then
           count=$(echo "${biome_out}" | jaq '[(.diagnostics // [])[] |
             select(.severity == "error" or .severity == "warning")] | length' 2>/dev/null || echo "0")
@@ -896,7 +920,11 @@ handle_typescript() {
 
   # Detect Biome
   local biome_cmd
-  biome_cmd=$(detect_biome 2>/dev/null) || biome_cmd=""
+  detect_biome >/dev/null 2>&1; biome_ret=$?
+  biome_cmd=""
+  if [[ ${biome_ret} -eq 0 ]]; then
+    biome_cmd=$(detect_biome 2>/dev/null)
+  fi
 
   # SFC handling (D4): .vue/.svelte/.astro -> Semgrep only, skip Biome
   case "${ext}" in
@@ -912,7 +940,7 @@ handle_typescript() {
       _handle_semgrep_session "${fp}"
       return
       ;;
-    *) echo "[hook:warning] unhandled ext in vue check: ${ext}" >&2 ;;
+    *) ;;
   esac
 
   # Biome required for non-SFC TS/JS/CSS files
@@ -929,29 +957,33 @@ handle_typescript() {
   fi
 
   # Phase 1: Auto-format (silent) (D1, D10)
-  if is_auto_format_enabled; then
+  is_auto_format_enabled; auto_fmt=$?
+  if [[ ${auto_fmt} -eq 0 ]]; then
     local unsafe_config
     unsafe_config=$(get_ts_config "biome_unsafe_autofix" "false")
+    local rel_path
+    rel_path=$(_biome_relpath "${fp}")
     if [[ "${unsafe_config}" == "true" ]]; then
-      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write --unsafe "$(_biome_relpath "${fp}")") >/dev/null 2>&1 || true
+      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write --unsafe "${rel_path}") >/dev/null 2>&1 || true
     else
-      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write "$(_biome_relpath "${fp}")") >/dev/null 2>&1 || true
+      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
     fi
   fi
 
   # Phase 2a: Biome lint (blocking) (D1, D3)
   # D3: When oxlint enabled, skip 3 overlapping nursery rules
-  local biome_lint_args="lint --reporter=json"
+  local biome_lint_args=("lint" "--reporter=json")
   local oxlint_enabled
   oxlint_enabled=$(get_ts_config "oxlint_tsgolint" "false")
   if [[ "${oxlint_enabled}" == "true" ]]; then
-    biome_lint_args+=" --skip=nursery/noFloatingPromises"
-    biome_lint_args+=" --skip=nursery/noMisusedPromises"
-    biome_lint_args+=" --skip=nursery/useAwaitThenable"
+    biome_lint_args+=("--skip=nursery/noFloatingPromises")
+    biome_lint_args+=("--skip=nursery/noMisusedPromises")
+    biome_lint_args+=("--skip=nursery/useAwaitThenable")
   fi
   local biome_output
-  # shellcheck disable=SC2086
-  biome_output=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} ${biome_lint_args} "$(_biome_relpath "${fp}")") 2>/dev/null || true)
+  local rel_path_lint
+  rel_path_lint=$(_biome_relpath "${fp}")
+  biome_output=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} "${biome_lint_args[@]}" "${rel_path_lint}") 2>/dev/null || true)
 
   if [[ -n "${biome_output}" ]]; then
     local diag_count
@@ -1021,10 +1053,12 @@ esac
 # Determine file type and run appropriate linter
 case "${file_path}" in
   *.py)
-    is_language_enabled "python" || exit 0
+    is_language_enabled "python"; py_enabled=$?
+    if [[ ${py_enabled} -ne 0 ]]; then exit 0; fi
 
     # Python: Phase 1 - Auto-format and auto-fix (silent)
-    if is_auto_format_enabled && command -v ruff >/dev/null 2>&1; then
+    is_auto_format_enabled; auto_fmt=$?
+    if [[ ${auto_fmt} -eq 0 ]] && command -v ruff >/dev/null 2>&1; then
       # Format code (spacing, quotes, line length) - suppress all output
       ruff format --quiet "${file_path}" >/dev/null 2>&1 || true
       # Auto-fix linting issues (unused imports, sorting, blank lines) - suppress all output
@@ -1212,10 +1246,12 @@ case "${file_path}" in
     ;;
 
   *.sh | *.bash)
-    is_language_enabled "shell" || exit 0
+    is_language_enabled "shell"; sh_enabled=$?
+    if [[ ${sh_enabled} -ne 0 ]]; then exit 0; fi
 
     # Shell: Phase 1 - Auto-format with shfmt
-    if is_auto_format_enabled && command -v shfmt >/dev/null 2>&1; then
+    is_auto_format_enabled; auto_fmt=$?
+    if [[ ${auto_fmt} -eq 0 ]] && command -v shfmt >/dev/null 2>&1; then
       # Format shell script (indentation, spacing)
       # Using -i 2 for 2-space indent, -ci for case indent, -bn for binary ops
       shfmt -w -i 2 -ci -bn "${file_path}" 2>/dev/null || true
@@ -1242,7 +1278,8 @@ case "${file_path}" in
     ;;
 
   *.yml | *.yaml)
-    is_language_enabled "yaml" || exit 0
+    is_language_enabled "yaml"; yaml_enabled=$?
+    if [[ ${yaml_enabled} -ne 0 ]]; then exit 0; fi
 
     # YAML: yamllint - collect all issues
     if command -v yamllint >/dev/null 2>&1; then
@@ -1269,7 +1306,8 @@ case "${file_path}" in
     ;;
 
   *.json)
-    is_language_enabled "json" || exit 0
+    is_language_enabled "json"; json_enabled=$?
+    if [[ ${json_enabled} -ne 0 ]]; then exit 0; fi
 
     # JSON: Phase 1 - Validate syntax first
     json_error=$(jaq empty "${file_path}" 2>&1) || true
@@ -1285,10 +1323,16 @@ case "${file_path}" in
     else
       # JSON: Phase 2 - Auto-format valid JSON
       # Use Biome if TS enabled and available (D6), fallback to jaq pretty-print
-      if is_auto_format_enabled; then
+      is_auto_format_enabled; auto_fmt=$?
+      if [[ ${auto_fmt} -eq 0 ]]; then
         json_formatted=false
-        if is_typescript_enabled; then
-          _biome_cmd=$(detect_biome 2>/dev/null) || _biome_cmd=""
+        is_typescript_enabled; ts_enabled=$?
+        if [[ ${ts_enabled} -eq 0 ]]; then
+          detect_biome >/dev/null 2>&1; biome_ret=$?
+          _biome_cmd=""
+          if [[ ${biome_ret} -eq 0 ]]; then
+            _biome_cmd=$(detect_biome 2>/dev/null)
+          fi
           if [[ -n "${_biome_cmd}" ]]; then
             ${_biome_cmd} format --write "${file_path}" >/dev/null 2>&1 && json_formatted=true
           fi
@@ -1310,7 +1354,8 @@ case "${file_path}" in
     ;;
 
   Dockerfile | Dockerfile.* | */Dockerfile | */Dockerfile.* | *.dockerfile)
-    is_language_enabled "dockerfile" || exit 0
+    is_language_enabled "dockerfile"; docker_enabled=$?
+    if [[ ${docker_enabled} -ne 0 ]]; then exit 0; fi
 
     # Dockerfile: hadolint - collect all issues
     # Requires hadolint >= 2.12.0 for disable-ignore-pragma support
@@ -1343,12 +1388,14 @@ case "${file_path}" in
     ;;
 
   *.toml)
-    is_language_enabled "toml" || exit 0
+    is_language_enabled "toml"; toml_enabled=$?
+    if [[ ${toml_enabled} -ne 0 ]]; then exit 0; fi
 
     # NOTE: taplo.toml include pattern limits validation to project files.
     # Files outside project directory are silently excluded (known design).
     # TOML: Phase 1 - Auto-format
-    if is_auto_format_enabled && command -v taplo >/dev/null 2>&1; then
+    is_auto_format_enabled; auto_fmt=$?
+    if [[ ${auto_fmt} -eq 0 ]] && command -v taplo >/dev/null 2>&1; then
       # Format TOML in-place (fixes spacing, alignment)
       RUST_LOG=error taplo fmt "${file_path}" 2>/dev/null || true
     fi
@@ -1370,12 +1417,14 @@ case "${file_path}" in
     ;;
 
   *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.mts|*.cts|*.css|*.vue|*.svelte|*.astro)
-    is_typescript_enabled || exit 0
+    is_typescript_enabled; ts_enabled=$?
+    if [[ ${ts_enabled} -ne 0 ]]; then exit 0; fi
     handle_typescript "${file_path}"
     ;;
 
   *.md | *.mdx)
-    is_language_enabled "markdown" || exit 0
+    is_language_enabled "markdown"; md_enabled=$?
+    if [[ ${md_enabled} -ne 0 ]]; then exit 0; fi
 
     # Markdown: Phase 1 - Auto-fix what we can
     if command -v markdownlint-cli2 >/dev/null 2>&1; then
@@ -1383,7 +1432,8 @@ case "${file_path}" in
       # Without this, markdownlint merges globs from .markdownlint-cli2.jsonc
       # noBanner+noProgress in .markdownlint-cli2.jsonc suppress verbose output
       # Phase 1: Auto-fix (silently fixes what it can, outputs only unfixable issues)
-      if is_auto_format_enabled; then
+      is_auto_format_enabled; auto_fmt=$?
+      if [[ ${auto_fmt} -eq 0 ]]; then
         markdownlint-cli2 --no-globs --fix "${file_path}" >/dev/null 2>&1 || true
       fi
 
@@ -1467,7 +1517,8 @@ if [[ "${HOOK_SKIP_SUBPROCESS:-}" == "1" ]]; then
 fi
 
 # Delegate to subprocess to fix violations
-if is_subprocess_enabled && [[ -z "${HOOK_SKIP_SUBPROCESS:-}" ]]; then
+is_subprocess_enabled; sub_enabled=$?
+if [[ ${sub_enabled} -eq 0 ]] && [[ -z "${HOOK_SKIP_SUBPROCESS:-}" ]]; then
   spawn_fix_subprocess "${file_path}" "${collected_violations}" "${file_type}"
 fi
 

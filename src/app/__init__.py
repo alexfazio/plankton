@@ -1,1 +1,1 @@
-"""Plankton application package."""
+"""Plankton app package."""

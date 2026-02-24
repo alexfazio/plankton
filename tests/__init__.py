@@ -1,1 +1,1 @@
-"""Plankton test suite."""
+"""Plankton tests."""

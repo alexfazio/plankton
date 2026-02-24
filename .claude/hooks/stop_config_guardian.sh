@@ -34,12 +34,12 @@ load_protected_files_from_config() {
   local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
   if [[ -f "${config_file}" ]] && command -v jaq >/dev/null 2>&1; then
     PROTECTED_FILES=()
+    local pf_list
+    pf_list=$(jaq -r '.protected_files // [] | .[]' "${config_file}" 2>/dev/null)
     while IFS= read -r _pf; do
       [[ -z "${_pf}" ]] && continue
       PROTECTED_FILES+=("${_pf}")
-    done < <(
-      jaq -r '.protected_files // [] | .[]' "${config_file}" 2>/dev/null || true
-    )
+    done <<<"${pf_list}"
   fi
   if [[ ${#PROTECTED_FILES[@]} -eq 0 ]]; then
     PROTECTED_FILES=(

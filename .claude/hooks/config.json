@@ -90,10 +90,25 @@
     "python": "uv",
     "javascript": "bun",
     "allowed_subcommands": {
-      "npm": ["audit", "view", "pack", "publish", "whoami", "login"],
-      "pip": ["download"],
-      "yarn": ["audit", "info"],
-      "pnpm": ["audit", "info"],
+      "npm": [
+        "audit",
+        "view",
+        "pack",
+        "publish",
+        "whoami",
+        "login"
+      ],
+      "pip": [
+        "download"
+      ],
+      "yarn": [
+        "audit",
+        "info"
+      ],
+      "pnpm": [
+        "audit",
+        "info"
+      ],
       "poetry": [],
       "pipenv": []
     }
