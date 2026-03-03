@@ -21,6 +21,7 @@ benchmark/swebench/results/
 benchmark/swebench/patches/
 benchmark/archive/
 reports/
+.claude/hooks/report/
 assets/internal/
 docs/internal/
 docs/plans/
