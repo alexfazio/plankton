@@ -1018,6 +1018,66 @@ PM_OFF_JS_EOF
   test_bash_command "poetry diag+add compound" \
     "poetry --help && poetry add requests" "block" "${pm_project_dir}"
 
+  # === Compound Replacement Tests (multi-tool suggestion fix) ===
+  # These tests verify that compound commands with multiple blocked PMs
+  # receive a suggestion that replaces ALL blocked tools, not just the first.
+  echo ""
+  echo "--- Compound Replacement Tests ---"
+
+  # Cross-ecosystem: pip + npm (the original bug case)
+  test_bash_command "pip+npm both replaced" \
+    "pip install requests && npm install lodash" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash"
+
+  # Cross-ecosystem: pip + yarn
+  test_bash_command "pip+yarn both replaced" \
+    "pip install flask && yarn add express" "block" "${pm_project_dir}" \
+    "uv add flask && bun add express"
+
+  # Cross-ecosystem: poetry + npm
+  test_bash_command "poetry+npm both replaced" \
+    "poetry add requests && npm install lodash" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash"
+
+  # Cross-ecosystem: pipenv + pnpm
+  test_bash_command "pipenv+pnpm both replaced" \
+    "pipenv install && pnpm add react" "block" "${pm_project_dir}" \
+    "uv sync && bun add react"
+
+  # Same-ecosystem: pip + poetry (both Python -> uv)
+  test_bash_command "pip+poetry both replaced" \
+    "pip install flask && poetry add requests" "block" "${pm_project_dir}" \
+    "uv add flask && uv add requests"
+
+  # Same-ecosystem: npm + yarn (both JS -> bun)
+  test_bash_command "npm+yarn both replaced" \
+    "npm install lodash && yarn add express" "block" "${pm_project_dir}" \
+    "bun add lodash && bun add express"
+
+  # Mixed: safe command + blocked PM (only pip blocked)
+  test_bash_command "ls+pip preserves safe command" \
+    "ls -la && pip install requests" "block" "${pm_project_dir}" \
+    "ls -la && uv add requests"
+
+  # Mixed: blocked PM + safe command
+  test_bash_command "pip+ls preserves safe command" \
+    "pip install requests && ls -la" "block" "${pm_project_dir}" \
+    "uv add requests && ls -la"
+
+  # Three-segment compound
+  test_bash_command "three-segment compound" \
+    "pip install requests && npm install lodash && pip install flask" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash && uv add flask"
+
+  # Backward compatibility: single-tool commands still work
+  test_bash_command "single pip backward compat" \
+    "pip install requests" "block" "${pm_project_dir}" \
+    "uv add requests"
+
+  test_bash_command "single npm backward compat" \
+    "npm install lodash" "block" "${pm_project_dir}" \
+    "bun add lodash"
+
   echo ""
   echo "--- Pip Download Variant ---"
   test_bash_command "pip download -d allowed" \
