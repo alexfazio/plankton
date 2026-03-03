@@ -1570,6 +1570,192 @@ console.log("test");' \
   fi
 
 
+  # Structural: exit_json helper exists
+  if grep -q 'exit_json()' "${script_dir}/multi_linter.sh"; then
+    echo "PASS exit_json_exists: exit_json() helper defined"
+    passed=$((passed + 1))
+  else
+    echo "FAIL exit_json_exists: exit_json() not defined"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: RERUN_PHASE2_CODES initialized in rerun_phase2
+  if grep -q 'RERUN_PHASE2_CODES=""' "${script_dir}/multi_linter.sh"; then
+    echo "PASS rerun_phase2_codes_init: RERUN_PHASE2_CODES initialized"
+    passed=$((passed + 1))
+  else
+    echo "FAIL rerun_phase2_codes_init: RERUN_PHASE2_CODES not initialized"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: RERUN_PHASE2_CODES assigned in python case of rerun_phase2
+  # shellcheck disable=SC2016
+  if sed -n '/^rerun_phase2()/,/^[^ ]/p' "${script_dir}/multi_linter.sh" | grep -q 'RERUN_PHASE2_CODES="${all_codes}"'; then
+    echo "PASS rerun_phase2_codes_python: RERUN_PHASE2_CODES set from all_codes"
+    passed=$((passed + 1))
+  else
+    echo "FAIL rerun_phase2_codes_python: RERUN_PHASE2_CODES not set in python case"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: extract_violation_codes guard checks RERUN_PHASE2_CODES
+  if grep -q 'RERUN_PHASE2_CODES:-' "${script_dir}/multi_linter.sh"; then
+    echo "PASS extract_codes_guard: RERUN_PHASE2_CODES checked in guard"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_codes_guard: RERUN_PHASE2_CODES not in guard"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: python case in extract_violation_codes prefers RERUN_PHASE2_CODES
+  if sed -n '/^extract_violation_codes()/,/^}/p' "${script_dir}/multi_linter.sh" | grep -q 'RERUN_PHASE2_CODES'; then
+    echo "PASS extract_python_prefers_codes: python case references RERUN_PHASE2_CODES"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_python_prefers_codes: python case missing RERUN_PHASE2_CODES"
+    failed=$((failed + 1))
+  fi
+
+
+  echo ""
+  echo "--- JSON Protocol Tests ---"
+
+  # JSON Protocol: jaq missing -> valid JSON stdout
+  local mock_no_jaq="${temp_dir}/mock_no_jaq/bin"
+  mkdir -p "${mock_no_jaq}"
+  # Create a minimal PATH with only essential commands but NOT jaq
+  for cmd in bash cat grep sed printf echo head tail tr wc sort paste mkdir chmod rm; do
+    local real_path
+    real_path=$(command -v "${cmd}" 2>/dev/null) || continue
+    ln -sf "${real_path}" "${mock_no_jaq}/${cmd}"
+  done
+  local nojaq_file="${temp_dir}/nojaq_test.py"
+  echo '"""Module."""' > "${nojaq_file}"
+  local nojaq_json='{"tool_input": {"file_path": "'"${nojaq_file}"'"}}'
+  set +e
+  local nojaq_stdout
+  nojaq_stdout=$(echo "${nojaq_json}" | PATH="${mock_no_jaq}" \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nojaq_exit=$?
+  set -e
+  if [[ "${nojaq_exit}" -eq 0 ]] && echo "${nojaq_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_jaq: valid JSON when jaq missing"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_jaq: no valid JSON when jaq missing (exit=${nojaq_exit})"
+    echo "   stdout: ${nojaq_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: no file_path -> valid JSON stdout
+  set +e
+  local nopath_stdout
+  nopath_stdout=$(echo '{"tool_input": {}}' | \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nopath_exit=$?
+  set -e
+  if [[ "${nopath_exit}" -eq 0 ]] && echo "${nopath_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_path: valid JSON for missing file_path"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_path: no valid JSON for missing file_path (exit=${nopath_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: non-existent file -> valid JSON stdout
+  set +e
+  local nofile_stdout
+  nofile_stdout=$(echo '{"tool_input": {"file_path": "/tmp/does_not_exist_plankton_test.py"}}' | \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nofile_exit=$?
+  set -e
+  if [[ "${nofile_exit}" -eq 0 ]] && echo "${nofile_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_file: valid JSON for non-existent file"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_file: no valid JSON for non-existent file (exit=${nofile_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: unsupported file type -> valid JSON stdout
+  local unsup_file="${temp_dir}/test_unsupported.rb"
+  echo 'puts "hello"' > "${unsup_file}"
+  set +e
+  local unsup_stdout
+  unsup_stdout=$(echo '{"tool_input": {"file_path": "'"${unsup_file}"'"}}' | \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local unsup_exit=$?
+  set -e
+  if [[ "${unsup_exit}" -eq 0 ]] && echo "${unsup_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_unsupported: valid JSON for unsupported file type"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_unsupported: no valid JSON for unsupported type (exit=${unsup_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: language disabled -> valid JSON stdout
+  local disabled_project="${temp_dir}/disabled_project"
+  mkdir -p "${disabled_project}/.claude/hooks"
+  cat > "${disabled_project}/.claude/hooks/config.json" << 'DIS_EOF'
+{"languages": {"python": false}}
+DIS_EOF
+  local disabled_file="${temp_dir}/disabled_test.py"
+  echo '"""Module."""' > "${disabled_file}"
+  set +e
+  local dis_stdout
+  dis_stdout=$(echo '{"tool_input": {"file_path": "'"${disabled_file}"'"}}' | \
+    CLAUDE_PROJECT_DIR="${disabled_project}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local dis_exit=$?
+  set -e
+  if [[ "${dis_exit}" -eq 0 ]] && echo "${dis_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_lang_disabled: valid JSON when language disabled"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_lang_disabled: no valid JSON when language disabled (exit=${dis_exit})"
+    echo "   stdout: ${dis_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: clean file (zero violations) -> valid JSON stdout
+  local clean_file="${temp_dir}/clean_protocol_test.py"
+  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    pass\n' > "${clean_file}"
+  set +e
+  local clean_stdout
+  clean_stdout=$(echo '{"tool_input": {"file_path": "'"${clean_file}"'"}}' | HOOK_SKIP_SUBPROCESS=1 \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local clean_exit=$?
+  set -e
+  if [[ "${clean_exit}" -eq 0 ]] && echo "${clean_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_clean_file: valid JSON for zero-violation file"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_clean_file: no valid JSON for clean file (exit=${clean_exit})"
+    echo "   stdout: ${clean_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: no bare "exit 0" without hook_json/exit_json/printf
+  local bare_exits
+  bare_exits=$(grep -n 'exit 0' "${script_dir}/multi_linter.sh" \
+    | grep -v 'hook_json\|exit_json\|printf.*continue\|# ' \
+    | grep -v 'exit_json()' || true)
+  if [[ -z "${bare_exits}" ]]; then
+    echo "PASS json_protocol_no_bare_exit: all exit 0 paths use exit_json/hook_json"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_bare_exit: bare exit 0 found:"
+    echo "   ${bare_exits}"
+    failed=$((failed + 1))
+  fi
+
+
   echo ""
   echo "--- ShellCheck Compliance Tests ---"
 

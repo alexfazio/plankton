@@ -42,10 +42,14 @@ hook_json() {
   fi
 }
 
+# Emit JSON and exit clean — ensures Claude Code always receives valid JSON.
+# shellcheck disable=SC2329  # invoked indirectly
+exit_json() { hook_json "${1:-}"; exit 0; }
+
 # Fail-open if jaq is not installed (required for JSON parsing)
 if ! command -v jaq >/dev/null 2>&1; then
   echo "[hook] error: jaq is required but not found. Install: brew install jaq" >&2
-  exit 0
+  printf '{"continue":true}\n'; exit 0
 fi
 
 # ============================================================================
@@ -237,9 +241,9 @@ load_config
 
 # Master kill switch: hook_enabled=false in config.json disables all linting
 if [[ "$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null || true)" == "false" ]]; then
-  exit 0
+  exit_json
 fi
-check_config_migration || exit 0
+check_config_migration || exit_json
 load_model_patterns
 
 # Read JSON input from stdin
@@ -260,8 +264,8 @@ file_type=""
 file_path=$(jaq -r '.tool_input?.file_path? // empty' <<<"${input}" 2>/dev/null) || file_path=""
 
 # Skip if no file path or file doesn't exist
-[[ -z "${file_path}" ]] && exit 0
-[[ ! -f "${file_path}" ]] && exit 0
+[[ -z "${file_path}" ]] && exit_json
+[[ ! -f "${file_path}" ]] && exit_json
 
 # ============================================================================
 # PATH EXCLUSION FOR SECURITY LINTERS
@@ -682,14 +686,21 @@ rerun_phase2() {
   local count=0
   RERUN_PHASE2_RAW=""
   RERUN_PHASE2_COUNT=0
+  RERUN_PHASE2_CODES=""
 
   case "${ftype}" in
     python)
+      local all_codes=""
+
       # Ruff violations
       local v
       v=$(ruff check --preview --output-format=json "${fp}" 2>/dev/null) || true
       count=$(echo "${v}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
       RERUN_PHASE2_RAW="${v}"
+      local ruff_codes
+      # shellcheck disable=SC2016
+      ruff_codes=$(echo "${v}" | jaq -r '[.[].code // empty] | unique | join(", ")' 2>/dev/null) || ruff_codes=""
+      [[ -n "${ruff_codes}" ]] && all_codes="${ruff_codes}"
 
       # ty violations (uv run for project venv)
       if command -v uv >/dev/null 2>&1; then
@@ -698,6 +709,13 @@ rerun_phase2() {
         local ty_count
         ty_count=$(echo "${ty_out}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
         count=$((count + ty_count))
+        local ty_codes=""
+        if [[ "${ty_count}" -gt 0 ]]; then
+          # shellcheck disable=SC2016
+          ty_codes=$(echo "${ty_out}" | jaq -r '[.[].check_name // empty] | unique | join(", ")' 2>/dev/null) || ty_codes=""
+          [[ -z "${ty_codes}" ]] && ty_codes=$(echo "${ty_out}" | grep -oE '\[[a-z-]+\]' | tr -d '[]' | sort -u | paste -sd ', ' -) || true
+        fi
+        [[ -n "${ty_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${ty_codes}"
       fi
 
       # flake8-pydantic violations (uv run for project venv)
@@ -708,6 +726,9 @@ rerun_phase2() {
           local pyd_count
           pyd_count=$(echo "${pyd_out}" | wc -l | tr -d ' ')
           count=$((count + pyd_count))
+          local pyd_codes=""
+          pyd_codes=$(echo "${pyd_out}" | grep -oE 'PYD[0-9]+' | sort -u | paste -sd ', ' -) || pyd_codes=""
+          [[ -n "${pyd_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${pyd_codes}"
         fi
       fi
 
@@ -719,6 +740,7 @@ rerun_phase2() {
           local vulture_count
           vulture_count=$(echo "${vulture_out}" | wc -l | tr -d ' ')
           count=$((count + vulture_count))
+          [[ -n "${vulture_out}" ]] && all_codes="${all_codes:+${all_codes}, }unused-code"
         fi
       fi
 
@@ -729,6 +751,12 @@ rerun_phase2() {
         local bandit_count
         bandit_count=$(echo "${bandit_out}" | jaq '.results | length // 0' 2>/dev/null | head -n1 || echo "0")
         count=$((count + bandit_count))
+        local bandit_codes=""
+        if [[ "${bandit_count}" -gt 0 ]]; then
+          # shellcheck disable=SC2016
+          bandit_codes=$(echo "${bandit_out}" | jaq -r '[.results[].test_id // empty] | unique | join(", ")' 2>/dev/null) || bandit_codes=""
+        fi
+        [[ -n "${bandit_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${bandit_codes}"
       fi
 
       # flake8-async violations
@@ -739,8 +767,13 @@ rerun_phase2() {
           local async_count
           async_count=$(echo "${async_out}" | wc -l | tr -d ' ')
           count=$((count + async_count))
+          local async_codes=""
+          async_codes=$(echo "${async_out}" | grep -oE 'ASYNC[0-9]+' | sort -u | paste -sd ', ' -) || async_codes=""
+          [[ -n "${async_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${async_codes}"
         fi
       fi
+
+      RERUN_PHASE2_CODES="${all_codes}"
       ;;
     shell)
       if command -v shellcheck >/dev/null 2>&1; then
@@ -815,14 +848,18 @@ extract_violation_codes() {
   local ftype="$1"
   VIOLATION_CODES=""
 
-  if [[ -z "${RERUN_PHASE2_RAW:-}" ]]; then
+  if [[ -z "${RERUN_PHASE2_RAW:-}" ]] && [[ -z "${RERUN_PHASE2_CODES:-}" ]]; then
     return
   fi
 
   case "${ftype}" in
     python)
-      # shellcheck disable=SC2016 # jaq uses $var, not shell
-      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[.[].code] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      if [[ -n "${RERUN_PHASE2_CODES:-}" ]]; then
+        VIOLATION_CODES="${RERUN_PHASE2_CODES}"
+      else
+        # shellcheck disable=SC2016 # jaq uses $var, not shell
+        VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[.[].code] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      fi
       ;;
     shell)
       # shellcheck disable=SC2016
@@ -1086,13 +1123,13 @@ case "${file_path}" in
   *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.mts|*.cts|*.css) file_type="typescript" ;;
   *.vue|*.svelte|*.astro) file_type="typescript" ;;
   Dockerfile | Dockerfile.* | */Dockerfile | */Dockerfile.* | *.dockerfile | *.Dockerfile) file_type="dockerfile" ;;
-  *) exit 0 ;; # Unsupported
+  *) exit_json ;; # Unsupported
 esac
 
 # Determine file type and run appropriate linter
 case "${file_path}" in
   *.py)
-    is_language_enabled "python" || exit 0
+    is_language_enabled "python" || exit_json
 
     # Python: Phase 1 - Auto-format and auto-fix (silent)
     if is_auto_format_enabled && command -v ruff >/dev/null 2>&1; then
@@ -1283,7 +1320,7 @@ case "${file_path}" in
     ;;
 
   *.sh | *.bash)
-    is_language_enabled "shell" || exit 0
+    is_language_enabled "shell" || exit_json
 
     # Shell: Phase 1 - Auto-format with shfmt
     if is_auto_format_enabled && command -v shfmt >/dev/null 2>&1; then
@@ -1313,7 +1350,7 @@ case "${file_path}" in
     ;;
 
   *.yml | *.yaml)
-    is_language_enabled "yaml" || exit 0
+    is_language_enabled "yaml" || exit_json
 
     # YAML: yamllint - collect all issues
     if command -v yamllint >/dev/null 2>&1; then
@@ -1340,7 +1377,7 @@ case "${file_path}" in
     ;;
 
   *.json)
-    is_language_enabled "json" || exit 0
+    is_language_enabled "json" || exit_json
 
     # JSON: Phase 1 - Validate syntax first
     json_error=$(jaq empty "${file_path}" 2>&1) || true
@@ -1381,7 +1418,7 @@ case "${file_path}" in
     ;;
 
   Dockerfile | Dockerfile.* | */Dockerfile | */Dockerfile.* | *.dockerfile | *.Dockerfile)
-    is_language_enabled "dockerfile" || exit 0
+    is_language_enabled "dockerfile" || exit_json
 
     # Dockerfile: hadolint - collect all issues
     # Requires hadolint >= 2.12.0 for disable-ignore-pragma support
@@ -1414,7 +1451,7 @@ case "${file_path}" in
     ;;
 
   *.toml)
-    is_language_enabled "toml" || exit 0
+    is_language_enabled "toml" || exit_json
 
     # NOTE: taplo.toml include pattern limits validation to project files.
     # Files outside project directory are silently excluded (known design).
@@ -1441,12 +1478,12 @@ case "${file_path}" in
     ;;
 
   *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.mts|*.cts|*.css|*.vue|*.svelte|*.astro)
-    is_typescript_enabled || exit 0
+    is_typescript_enabled || exit_json
     handle_typescript "${file_path}"
     ;;
 
   *.md | *.mdx)
-    is_language_enabled "markdown" || exit 0
+    is_language_enabled "markdown" || exit_json
 
     # Markdown: Phase 1 - Auto-fix what we can
     if command -v markdownlint-cli2 >/dev/null 2>&1; then
@@ -1497,7 +1534,7 @@ esac
 
 # If no issues, exit clean
 if [[ "${has_issues}" = false ]]; then
-  exit 0
+  exit_json
 fi
 
 # Calculate model selection for debugging/testing
@@ -1531,7 +1568,7 @@ fi
 if [[ "${HOOK_SKIP_SUBPROCESS:-}" == "1" ]]; then
   skip_count=$(echo "${collected_violations}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
   if [[ "${skip_count}" -eq 0 ]]; then
-    exit 0
+    exit_json
   fi
   echo "[hook] ${collected_violations}" >&2
   exit 2
@@ -1548,8 +1585,7 @@ rerun_phase2 "${file_path}" "${file_type}"
 remaining="${RERUN_PHASE2_COUNT}"
 
 if [[ "${remaining}" -eq 0 ]]; then
-  hook_json "Phase 3 resolved all violations."
-  exit 0
+  exit_json "Phase 3 resolved all violations."
 else
   extract_violation_codes "${file_type}"
   _base_name=$(basename "${file_path}")
