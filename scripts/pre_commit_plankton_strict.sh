@@ -30,6 +30,7 @@ fi
 
 make_payload() {
   local abs_path="$1"
+  # shellcheck disable=SC2016 # $tool_name/$file_path are jaq variables, not shell variables.
   jaq -cn --arg tool_name "Write" --arg file_path "${abs_path}" \
     '{tool_name: $tool_name, tool_input: {file_path: $file_path}}'
 }
@@ -85,7 +86,14 @@ for rel_path in "$@"; do
     fi
   fi
 
-  before_hash=$(sha_file "${abs_path}" || true)
+  before_hash=""
+  set +e
+  before_hash=$(sha_file "${abs_path}")
+  before_hash_status=$?
+  set -e
+  if [[ "${before_hash_status}" -ne 0 ]]; then
+    before_hash=""
+  fi
   stdout_file=$(mktemp)
   stderr_file=$(mktemp)
 
@@ -96,7 +104,14 @@ for rel_path in "$@"; do
   hook_status=$?
   set -e
 
-  after_hash=$(sha_file "${abs_path}" || true)
+  after_hash=""
+  set +e
+  after_hash=$(sha_file "${abs_path}")
+  after_hash_status=$?
+  set -e
+  if [[ "${after_hash_status}" -ne 0 ]]; then
+    after_hash=""
+  fi
   file_changed="no"
   if [[ -n "${before_hash}" ]] && [[ -n "${after_hash}" ]] && [[ "${before_hash}" != "${after_hash}" ]]; then
     file_changed="yes"
@@ -108,10 +123,16 @@ for rel_path in "$@"; do
   fi
 
   case "${hook_status}" in
-    0)
-      ;;
+    0) ;;
     2)
-      message=$(summarize_remaining "${stderr_file}" || true)
+      message=""
+      set +e
+      message=$(summarize_remaining "${stderr_file}")
+      message_status=$?
+      set -e
+      if [[ "${message_status}" -ne 0 ]]; then
+        message=""
+      fi
       [[ -z "${message:-}" ]] && message="violations remain after deterministic checks"
       echo "plankton: ${rel_path}: ${message}" >&2
       had_failure=1

@@ -128,6 +128,10 @@ For the full motivation and design story, read the
 # commit-message policy hook.
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
 
+# Repo-wide baseline sweep (skip the staged-file strict runtime hook;
+# it is designed for real commits and targeted reruns, not --all-files)
+SKIP=plankton-strict-runtime-commit uv run pre-commit run --all-files
+
 # Manually re-run the same strict gate on currently staged files
 make strict
 

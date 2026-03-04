@@ -1,7 +1,7 @@
 # Pre-commit hooks for code quality enforcement
 # Install: uv add --dev pre-commit && uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
 # Pre-push: uv run pre-commit install --hook-type pre-push
-# Run: uv run pre-commit run --all-files
+# Run (repo-wide baseline): SKIP=plankton-strict-runtime-commit uv run pre-commit run --all-files
 
 default_stages: [pre-commit, pre-push]
 
