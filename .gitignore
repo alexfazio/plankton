@@ -16,7 +16,14 @@ hub/
 .claude/tests/hooks/results/.start_ts
 .claude/tests/hooks/results/archive/
 benchmark/*
+!benchmark/__init__.py
 !benchmark/swebench/
+!benchmark/tests/
+!benchmark/tests/*.py
+!benchmark/tests/integration/
+!benchmark/tests/integration/*.py
+!benchmark/tests/unit/
+!benchmark/tests/unit/*.py
 benchmark/swebench/results/
 benchmark/swebench/patches/
 benchmark/archive/

@@ -6,6 +6,7 @@
 # Run (repo-wide baseline): SKIP=plankton-strict-runtime-commit uv run pre-commit run --all-files
 
 default_stages: [pre-commit, pre-push]
+exclude: ^benchmark/tests/
 
 repos:
   - repo: local
