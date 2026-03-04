@@ -21,7 +21,6 @@ run_self_test() {
   temp_dir=$(mktemp -d)
   trap 'rm -rf "${temp_dir}"; rm -f "${project_dir}/test_fixture_broken.toml" "${project_dir}/test_directive_broken.toml" /tmp/.biome_path_$$ /tmp/.semgrep_session_$$ /tmp/.semgrep_session_$$.done /tmp/.jscpd_ts_session_$$ /tmp/.jscpd_session_$$ /tmp/.sfc_warned_*_$$ /tmp/.nursery_checked_$$ /tmp/.pm_warn_*_$$ /tmp/.pm_test_stderr_$$ /tmp/.pm_enforcement_$$.log' EXIT
 
-
   # --- Shared test fixture (decouples tests from production config) ---
   local fixture_project_dir="${temp_dir}/fixture_project"
   mkdir -p "${fixture_project_dir}/.claude/hooks"
@@ -64,10 +63,10 @@ run_self_test() {
   # Test helper for package manager hook (enforce_package_managers.sh)
   # Sends a Bash tool_input.command JSON to the PM hook and checks the decision.
   test_bash_command() {
-    local name="$1"           # Test name
-    local command_str="$2"    # Command to test
-    local expected="$3"       # "approve" or "block"
-    local pm_dir="$4"         # CLAUDE_PROJECT_DIR override (temp dir with config)
+    local name="$1"            # Test name
+    local command_str="$2"     # Command to test
+    local expected="$3"        # "approve" or "block"
+    local pm_dir="$4"          # CLAUDE_PROJECT_DIR override (temp dir with config)
     local extra_check="${5:-}" # Optional: string to grep in stdout+stderr
 
     local json_input="{\"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"${command_str}\"}}"
@@ -291,7 +290,7 @@ def foo():
   # Create a temp project directory with TS-enabled config
   ts_project_dir="${temp_dir}/ts_project"
   mkdir -p "${ts_project_dir}/.claude/hooks"
-  cat > "${ts_project_dir}/.claude/hooks/config.json" << 'TS_CFG_EOF'
+  cat >"${ts_project_dir}/.claude/hooks/config.json" <<'TS_CFG_EOF'
 {
   "languages": {
     "python": true, "shell": true, "yaml": true, "json": true,
@@ -407,7 +406,7 @@ console.log(x);' 0
     # Uses its own config fixture with typescript disabled
     ts_disabled_dir="${temp_dir}/ts_disabled_project"
     mkdir -p "${ts_disabled_dir}/.claude/hooks"
-    cat > "${ts_disabled_dir}/.claude/hooks/config.json" << 'TS_DIS_EOF'
+    cat >"${ts_disabled_dir}/.claude/hooks/config.json" <<'TS_DIS_EOF'
 {
   "languages": {
     "python": true, "shell": true, "yaml": true, "json": true,
@@ -418,7 +417,7 @@ console.log(x);' 0
 }
 TS_DIS_EOF
     local ts_dis_file="${temp_dir}/skipped.ts"
-    echo 'const unused = "should be skipped";' > "${ts_dis_file}"
+    echo 'const unused = "should be skipped";' >"${ts_dis_file}"
     local ts_dis_json='{"tool_input": {"file_path": "'"${ts_dis_file}"'"}}'
     set +e
     echo "${ts_dis_json}" | HOOK_SKIP_SUBPROCESS=1 \
@@ -459,9 +458,9 @@ console.log(used);' \
     # Nursery rules require biome.json in project root with explicit
     # nursery config; default biome config has no lint/nursery/ rules.
     # Conditionally test if a nursery rule fires on the fixture.
-    echo "${temp_dir}/nursery.ts" > /dev/null  # placeholder path
+    echo "${temp_dir}/nursery.ts" >/dev/null # placeholder path
     local nursery_file="${temp_dir}/nursery.ts"
-    printf 'const foo = "bar";\nfunction f() { const foo = 1; console.log(foo); }\nf();\nconsole.log(foo);\n' > "${nursery_file}"
+    printf 'const foo = "bar";\nfunction f() { const foo = 1; console.log(foo); }\nf();\nconsole.log(foo);\n' >"${nursery_file}"
     local nursery_json='{"tool_input": {"file_path": "'"${nursery_file}"'"}}'
     set +e
     local nursery_out
@@ -558,7 +557,7 @@ console.log("none used");' \
     # Test 15: SFC file warning (D4)
     if ! command -v semgrep >/dev/null 2>&1; then
       local sfc_file="${temp_dir}/component.vue"
-      printf '<script>export default {}</script>\n' > "${sfc_file}"
+      printf '<script>export default {}</script>\n' >"${sfc_file}"
       local sfc_json='{"tool_input":{"file_path":"'"${sfc_file}"'"}}'
       set +e
       local sfc_out
@@ -581,7 +580,7 @@ console.log("none used");' \
     # Test 16: D3 oxlint overlap — nursery rules actually skipped
     local d3_dir="${temp_dir}/d3_project"
     mkdir -p "${d3_dir}/.claude/hooks"
-    cat > "${d3_dir}/.claude/hooks/config.json" << 'D3_CFG_EOF'
+    cat >"${d3_dir}/.claude/hooks/config.json" <<'D3_CFG_EOF'
 {
   "languages": {
     "typescript": {
@@ -605,7 +604,7 @@ console.log("none used");' \
 }
 D3_CFG_EOF
     # biome.json enables the nursery rule so it would fire without --skip
-    cat > "${d3_dir}/biome.json" << 'D3_BIOME_EOF'
+    cat >"${d3_dir}/biome.json" <<'D3_BIOME_EOF'
 {
   "linter": {
     "rules": {
@@ -617,7 +616,7 @@ D3_CFG_EOF
 }
 D3_BIOME_EOF
     # tsconfig.json required for type-aware nursery rules
-    cat > "${d3_dir}/tsconfig.json" << 'D3_TS_EOF'
+    cat >"${d3_dir}/tsconfig.json" <<'D3_TS_EOF'
 {
   "compilerOptions": {
     "strict": true,
@@ -630,7 +629,7 @@ D3_BIOME_EOF
 D3_TS_EOF
     # File with floating promise (triggers noFloatingPromises)
     local d3_file="${d3_dir}/d3_test.ts"
-    cat > "${d3_file}" << 'D3_SRC_EOF'
+    cat >"${d3_file}" <<'D3_SRC_EOF'
 async function fetchData(): Promise<string> {
   return "data";
 }
@@ -648,7 +647,7 @@ D3_SRC_EOF
     # With oxlint_tsgolint=true, --skip suppresses the 3 overlap rules
     # Match lint violation format (lint/nursery/...) not config warnings
     if echo "${d3_out}" | grep -qE \
-        'lint/nursery/noFloatingPromises|lint/nursery/noMisusedPromises|lint/nursery/useAwaitThenable'; then
+      'lint/nursery/noFloatingPromises|lint/nursery/noMisusedPromises|lint/nursery/useAwaitThenable'; then
       echo "FAIL D3 overlap: disabled rules still reported"
       echo "   Output: ${d3_out}"
       failed=$((failed + 1))
@@ -669,7 +668,7 @@ D3_SRC_EOF
   no_biome_dir="${temp_dir}/no_biome_project"
   mkdir -p "${no_biome_dir}/.claude/hooks"
   # Use js_runtime: "none" to force detect_biome() to find nothing
-  cat > "${no_biome_dir}/.claude/hooks/config.json" << 'NOBIOME_EOF'
+  cat >"${no_biome_dir}/.claude/hooks/config.json" <<'NOBIOME_EOF'
 {
   "languages": {
     "typescript": {
@@ -694,7 +693,7 @@ NOBIOME_EOF
 
   no_biome_content='const x = 1;
 console.log(x);'
-  echo "${no_biome_content}" > "${temp_dir}/no_biome.ts"
+  echo "${no_biome_content}" >"${temp_dir}/no_biome.ts"
   no_biome_json='{"tool_input": {"file_path": "'"${temp_dir}/no_biome.ts"'"}}'
   set +e
   echo "${no_biome_json}" | HOOK_SKIP_SUBPROCESS=1 \
@@ -734,12 +733,12 @@ console.log(x);'
   pm_off_js_dir="${temp_dir}/pm_off_js"
 
   for d in "${pm_project_dir}" "${pm_warn_py_dir}" "${pm_warn_js_dir}" \
-            "${pm_off_py_dir}" "${pm_off_js_dir}"; do
+    "${pm_off_py_dir}" "${pm_off_js_dir}"; do
     mkdir -p "${d}/.claude/hooks"
   done
 
   # Default: both ecosystems block mode
-  cat > "${pm_project_dir}/.claude/hooks/config.json" << 'PM_CFG_EOF'
+  cat >"${pm_project_dir}/.claude/hooks/config.json" <<'PM_CFG_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -757,7 +756,7 @@ console.log(x);'
 PM_CFG_EOF
 
   # python: warn, JS: block
-  cat > "${pm_warn_py_dir}/.claude/hooks/config.json" << 'PM_WARN_PY_EOF'
+  cat >"${pm_warn_py_dir}/.claude/hooks/config.json" <<'PM_WARN_PY_EOF'
 {
   "package_managers": {
     "python": "uv:warn",
@@ -775,7 +774,7 @@ PM_CFG_EOF
 PM_WARN_PY_EOF
 
   # python: block, JS: warn
-  cat > "${pm_warn_js_dir}/.claude/hooks/config.json" << 'PM_WARN_JS_EOF'
+  cat >"${pm_warn_js_dir}/.claude/hooks/config.json" <<'PM_WARN_JS_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -793,7 +792,7 @@ PM_WARN_PY_EOF
 PM_WARN_JS_EOF
 
   # python: disabled, JS: block
-  cat > "${pm_off_py_dir}/.claude/hooks/config.json" << 'PM_OFF_PY_EOF'
+  cat >"${pm_off_py_dir}/.claude/hooks/config.json" <<'PM_OFF_PY_EOF'
 {
   "package_managers": {
     "python": false,
@@ -811,7 +810,7 @@ PM_WARN_JS_EOF
 PM_OFF_PY_EOF
 
   # python: block, JS: disabled
-  cat > "${pm_off_js_dir}/.claude/hooks/config.json" << 'PM_OFF_JS_EOF'
+  cat >"${pm_off_js_dir}/.claude/hooks/config.json" <<'PM_OFF_JS_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -1465,15 +1464,15 @@ console.log("test");' >"${ts_feedback_file}"
     # Mock claude: accepts any args, exits 0, does nothing to the file
     local mock_dir="${temp_dir}/mock_bin"
     mkdir -p "${mock_dir}"
-    printf '#!/bin/sh\nexit 0\n' > "${mock_dir}/claude"
+    printf '#!/bin/sh\nexit 0\n' >"${mock_dir}/claude"
     chmod +x "${mock_dir}/claude"
 
     set +e
     local stdout_output
-    stdout_output=$(echo "${json_input}" | \
-      PATH="${mock_dir}:${PATH}" \
-      CLAUDE_PROJECT_DIR="${proj_dir}" \
-      "${script_dir}/multi_linter.sh" 2>/dev/null)
+    stdout_output=$(echo "${json_input}" \
+      | PATH="${mock_dir}:${PATH}" \
+        CLAUDE_PROJECT_DIR="${proj_dir}" \
+        "${script_dir}/multi_linter.sh" 2>/dev/null)
     local actual_exit=$?
     set -e
 
@@ -1629,7 +1628,6 @@ console.log("test");' \
     failed=$((failed + 1))
   fi
 
-
   # Structural: exit_json helper exists
   if grep -q 'exit_json()' "${script_dir}/multi_linter.sh"; then
     echo "PASS exit_json_exists: exit_json() helper defined"
@@ -1676,7 +1674,6 @@ console.log("test");' \
     failed=$((failed + 1))
   fi
 
-
   echo ""
   echo "--- JSON Protocol Tests ---"
 
@@ -1690,7 +1687,7 @@ console.log("test");' \
     ln -sf "${real_path}" "${mock_no_jaq}/${cmd}"
   done
   local nojaq_file="${temp_dir}/nojaq_test.py"
-  echo '"""Module."""' > "${nojaq_file}"
+  echo '"""Module."""' >"${nojaq_file}"
   local nojaq_json='{"tool_input": {"file_path": "'"${nojaq_file}"'"}}'
   set +e
   local nojaq_stdout
@@ -1711,9 +1708,9 @@ console.log("test");' \
   # JSON Protocol: no file_path -> valid JSON stdout
   set +e
   local nopath_stdout
-  nopath_stdout=$(echo '{"tool_input": {}}' | \
-    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
-    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  nopath_stdout=$(echo '{"tool_input": {}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
   local nopath_exit=$?
   set -e
   if [[ "${nopath_exit}" -eq 0 ]] && echo "${nopath_stdout}" | grep -q '"continue"'; then
@@ -1727,9 +1724,9 @@ console.log("test");' \
   # JSON Protocol: non-existent file -> valid JSON stdout
   set +e
   local nofile_stdout
-  nofile_stdout=$(echo '{"tool_input": {"file_path": "/tmp/does_not_exist_plankton_test.py"}}' | \
-    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
-    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  nofile_stdout=$(echo '{"tool_input": {"file_path": "/tmp/does_not_exist_plankton_test.py"}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
   local nofile_exit=$?
   set -e
   if [[ "${nofile_exit}" -eq 0 ]] && echo "${nofile_stdout}" | grep -q '"continue"'; then
@@ -1742,12 +1739,12 @@ console.log("test");' \
 
   # JSON Protocol: unsupported file type -> valid JSON stdout
   local unsup_file="${temp_dir}/test_unsupported.rb"
-  echo 'puts "hello"' > "${unsup_file}"
+  echo 'puts "hello"' >"${unsup_file}"
   set +e
   local unsup_stdout
-  unsup_stdout=$(echo '{"tool_input": {"file_path": "'"${unsup_file}"'"}}' | \
-    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
-    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  unsup_stdout=$(echo '{"tool_input": {"file_path": "'"${unsup_file}"'"}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
   local unsup_exit=$?
   set -e
   if [[ "${unsup_exit}" -eq 0 ]] && echo "${unsup_stdout}" | grep -q '"continue"'; then
@@ -1761,16 +1758,16 @@ console.log("test");' \
   # JSON Protocol: language disabled -> valid JSON stdout
   local disabled_project="${temp_dir}/disabled_project"
   mkdir -p "${disabled_project}/.claude/hooks"
-  cat > "${disabled_project}/.claude/hooks/config.json" << 'DIS_EOF'
+  cat >"${disabled_project}/.claude/hooks/config.json" <<'DIS_EOF'
 {"languages": {"python": false}}
 DIS_EOF
   local disabled_file="${temp_dir}/disabled_test.py"
-  echo '"""Module."""' > "${disabled_file}"
+  echo '"""Module."""' >"${disabled_file}"
   set +e
   local dis_stdout
-  dis_stdout=$(echo '{"tool_input": {"file_path": "'"${disabled_file}"'"}}' | \
-    CLAUDE_PROJECT_DIR="${disabled_project}" \
-    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  dis_stdout=$(echo '{"tool_input": {"file_path": "'"${disabled_file}"'"}}' \
+    | CLAUDE_PROJECT_DIR="${disabled_project}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
   local dis_exit=$?
   set -e
   if [[ "${dis_exit}" -eq 0 ]] && echo "${dis_stdout}" | grep -q '"continue"'; then
@@ -1784,7 +1781,7 @@ DIS_EOF
 
   # JSON Protocol: clean file (zero violations) -> valid JSON stdout
   local clean_file="${temp_dir}/clean_protocol_test.py"
-  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    pass\n' > "${clean_file}"
+  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    pass\n' >"${clean_file}"
   set +e
   local clean_stdout
   clean_stdout=$(echo '{"tool_input": {"file_path": "'"${clean_file}"'"}}' | HOOK_SKIP_SUBPROCESS=1 \
@@ -1803,9 +1800,30 @@ DIS_EOF
 
   # Structural: no bare "exit 0" without hook_json/exit_json/printf
   local bare_exits
-  bare_exits=$(grep -n 'exit 0' "${script_dir}/multi_linter.sh" \
-    | grep -v 'hook_json\|exit_json\|printf.*continue\|# ' \
-    | grep -v 'exit_json()' || true)
+  bare_exits=$(awk '
+    /^[[:space:]]*exit_json\(\)[[:space:]]*\{/ {
+      in_exit_json = 1
+      next
+    }
+    in_exit_json && /^[[:space:]]*}[[:space:]]*$/ {
+      in_exit_json = 0
+      next
+    }
+    {
+      if ($0 ~ /^[[:space:]]*exit 0[[:space:]]*$/) {
+        if (in_exit_json) {
+          next
+        }
+        if (prev ~ /printf .*continue/) {
+          next
+        }
+        print NR ":" $0
+      }
+      if ($0 !~ /^[[:space:]]*$/) {
+        prev = $0
+      }
+    }
+  ' "${script_dir}/multi_linter.sh")
   if [[ -z "${bare_exits}" ]]; then
     echo "PASS json_protocol_no_bare_exit: all exit 0 paths use exit_json/hook_json"
     passed=$((passed + 1))
@@ -1814,7 +1832,6 @@ DIS_EOF
     echo "   ${bare_exits}"
     failed=$((failed + 1))
   fi
-
 
   echo ""
   echo "--- set-e Hardening Tests ---"
@@ -1902,23 +1919,23 @@ DIS_EOF
   local mock_claude_dir="${temp_dir}/mock_claude_bin"
   mkdir -p "${mock_claude_dir}"
   # Create mock 'claude' that always exits 1 (simulates subprocess crash)
-  printf '#!/bin/bash\nexit 1\n' > "${mock_claude_dir}/claude"
+  printf '#!/bin/bash\nexit 1\n' >"${mock_claude_dir}/claude"
   chmod +x "${mock_claude_dir}/claude"
   # Create mock 'timeout' that passes through to the command
-  printf '#!/bin/bash\nshift; exec "$@"\n' > "${mock_claude_dir}/timeout"
+  printf '#!/bin/bash\nshift; exec "$@"\n' >"${mock_claude_dir}/timeout"
   chmod +x "${mock_claude_dir}/timeout"
 
   # Python file with violation (F841 unused variable) to trigger subprocess delegation
   local bug3_file="${temp_dir}/bug3_test.py"
-  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    unused_var = 1\n    return 42\n' > "${bug3_file}"
+  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    unused_var = 1\n    return 42\n' >"${bug3_file}"
 
   local bug3_json='{"tool_input": {"file_path": "'"${bug3_file}"'"}}'
   set +e
   local bug3_stdout
-  bug3_stdout=$(echo "${bug3_json}" | \
-    PATH="${mock_claude_dir}:${PATH}" \
-    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
-    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  bug3_stdout=$(echo "${bug3_json}" \
+    | PATH="${mock_claude_dir}:${PATH}" \
+      CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
   local bug3_exit=$?
   set -e
 
@@ -1974,12 +1991,12 @@ DIS_EOF
   if command -v shellcheck >/dev/null 2>&1; then
     local sc_ok=true
     for sc_file in "${script_dir}/multi_linter.sh" \
-                   "${script_dir}/protect_linter_configs.sh" \
-                   "${script_dir}/enforce_package_managers.sh" \
-                   "${script_dir}/stop_config_guardian.sh" \
-                   "${script_dir}/approve_configs.sh" \
-                   "${script_dir}/test_hook.sh" \
-                   "${script_dir}/../tests/hooks/test_subprocess_permissions.sh"; do
+      "${script_dir}/protect_linter_configs.sh" \
+      "${script_dir}/enforce_package_managers.sh" \
+      "${script_dir}/stop_config_guardian.sh" \
+      "${script_dir}/approve_configs.sh" \
+      "${script_dir}/test_hook.sh" \
+      "${script_dir}/../tests/hooks/test_subprocess_permissions.sh"; do
       if [[ -f "${sc_file}" ]]; then
         # shellcheck disable=SC2310  # intentional: checking in if
         if ! shellcheck "${sc_file}" >/dev/null 2>&1; then
