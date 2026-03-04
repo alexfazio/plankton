@@ -22,6 +22,9 @@
     ".venv/**",
     "node_modules/**",
     "build/**",
-    "dist/**"
+    "dist/**",
+    "docs/specs/**",
+    "docs/internal/**",
+    ".claude/tests/hooks/results/archive/**"
   ]
 }

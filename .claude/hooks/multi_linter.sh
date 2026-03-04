@@ -26,11 +26,53 @@
 #   2 - Issues remain after delegation attempt
 
 set -euo pipefail
+
+# Ensure Python venv tools are discoverable (uv sync installs to .venv/bin/)
+# On macOS tools are on PATH via brew; on Linux they're only in the venv.
+if [[ -d "${CLAUDE_PROJECT_DIR:-.}/.venv/bin" ]]; then
+  export PATH="${CLAUDE_PROJECT_DIR:-.}/.venv/bin:${PATH}"
+fi
+
 trap 'kill 0' SIGTERM
+
+# Output JSON to stdout for Claude Code hook protocol.
+# PostToolUse hooks should return {"continue":true,"systemMessage":"..."}.
+# Called at meaningful exit points (post-linting) — early bail-outs skip this.
+# shellcheck disable=SC2329  # Called at exit points (wiring in progress)
+hook_json() {
+  local msg="${1:-}"
+  if [[ -n "${msg}" ]]; then
+    # shellcheck disable=SC2016 # $m is a jaq variable, not shell
+    jaq -n --arg m "${msg}" '{"continue":true,"systemMessage":$m}' 2>/dev/null || printf '{"continue":true}\n'
+  else
+    printf '{"continue":true}\n'
+  fi
+}
+
+# Emit JSON and exit clean — ensures Claude Code always receives valid JSON.
+# shellcheck disable=SC2329  # invoked indirectly
+exit_json() {
+  hook_json "${1:-}"
+  exit 0
+}
+
+# Emit structured timing diagnostics to stderr and, optionally, to a file.
+# Never writes to stdout. Fail-open by design.
+hook_diag() {
+  local line="[hook:timing] t=${SECONDS} $*"
+  printf '%s\n' "${line}" >&2
+  if [[ -n "${HOOK_TIMING_LOG_FILE:-}" ]]; then
+    local _log_dir
+    _log_dir=$(dirname "${HOOK_TIMING_LOG_FILE}")
+    mkdir -p "${_log_dir}" 2>/dev/null || true
+    printf '%s\n' "${line}" >>"${HOOK_TIMING_LOG_FILE}" 2>/dev/null || true
+  fi
+}
 
 # Fail-open if jaq is not installed (required for JSON parsing)
 if ! command -v jaq >/dev/null 2>&1; then
   echo "[hook] error: jaq is required but not found. Install: brew install jaq" >&2
+  printf '{"continue":true}\n'
   exit 0
 fi
 
@@ -58,10 +100,12 @@ is_language_enabled() {
   [[ "${enabled}" != "false" ]]
 }
 
-# Get exclusion patterns from config (defaults if not configured)
-get_exclusions() {
-  local defaults='["tests/","docs/",".venv/","scripts/","node_modules/",".git/",".claude/"]'
-  echo "${CONFIG_JSON}" | jaq -r ".exclusions // ${defaults} | .[]" 2>/dev/null
+# Get security-linter exclusion patterns from config (defaults if not configured).
+# Backward compatible: prefer security_linter_exclusions, fall back to legacy
+# exclusions if present.
+get_security_linter_exclusions() {
+  local defaults='[".venv/","node_modules/",".git/"]'
+  echo "${CONFIG_JSON}" | jaq -r ".security_linter_exclusions // .exclusions // ${defaults} | .[]" 2>/dev/null
 }
 
 # Detect and reject old flat config format
@@ -151,7 +195,7 @@ is_typescript_enabled() {
   local ts_config
   ts_config=$(echo "${CONFIG_JSON}" | jaq -r '.languages.typescript' 2>/dev/null)
   case "${ts_config}" in
-    false|null) return 1 ;;
+    false | null) return 1 ;;
     true) return 0 ;;
     *) # nested object - check .enabled field
       local enabled
@@ -210,7 +254,7 @@ detect_biome() {
   fi
 
   if [[ -n "${biome_cmd}" ]]; then
-    echo "${biome_cmd}" > "${cache_file}"
+    echo "${biome_cmd}" >"${cache_file}"
     echo "${biome_cmd}"
     return 0
   fi
@@ -226,11 +270,13 @@ _hook_enabled=$(echo "${CONFIG_JSON}" | jaq -r '.hook_enabled' 2>/dev/null)
 if [[ "${_hook_enabled}" == "false" ]]; then
   exit 0
 fi
-check_config_migration || exit 0
+check_config_migration || exit_json
 load_model_patterns
 
 # Read JSON input from stdin
 input=$(cat)
+tool_name=$(jaq -r '.tool_name // empty' <<<"${input}" 2>/dev/null) || tool_name=""
+[[ -z "${tool_name}" ]] && tool_name="unknown"
 
 # Track if any issues found
 has_issues=false
@@ -244,11 +290,11 @@ file_type=""
 # Note: HOOK_SUBPROCESS_TIMEOUT env var is handled inside load_model_patterns
 
 # Extract file path from tool_input
-file_path=$(jaq -r '.tool_input?.file_path? // empty' <<<"${input}" 2>/dev/null) || file_path=""
+file_path=$(jaq -r '.tool_input?.file_path? // .tool_input?.notebook_path? // empty' <<<"${input}" 2>/dev/null) || file_path=""
 
 # Skip if no file path or file doesn't exist
-[[ -z "${file_path}" ]] && exit 0
-[[ ! -f "${file_path}" ]] && exit 0
+[[ -z "${file_path}" ]] && exit_json
+[[ ! -f "${file_path}" ]] && exit_json
 
 # ============================================================================
 # PATH EXCLUSION FOR SECURITY LINTERS
@@ -286,9 +332,22 @@ spawn_fix_subprocess() {
   local violations_json="$2"
   local ftype="$3"
 
+  # Filter violations for docstring-specialized branch (BUG-7 fix)
+  # If Python file has real D### docstring codes, narrow to D-only subset.
+  # Non-D violations are handled by the rerun loop after docstrings are fixed.
+  local prompt_violations_json="${violations_json}"
+  if [[ "${ftype}" == "python" ]] && echo "${violations_json}" | jaq -e '[.[] | select(.code | test("^D[0-9]+$"))] | length > 0' >/dev/null 2>&1; then
+    prompt_violations_json=$(echo "${violations_json}" | jaq -c '[.[] | select(.code | test("^D[0-9]+$"))]' 2>/dev/null) || prompt_violations_json="${violations_json}"
+  fi
+
+  # Compute prompt-side count and codes once (used for logs and model selection)
+  local prompt_count prompt_codes
+  prompt_count=$(echo "${prompt_violations_json}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
+  prompt_codes=$(echo "${prompt_violations_json}" | jaq -r '[.[].code] | sort | unique | join(",")' 2>/dev/null || echo "")
+  hook_diag "phase=delegate_plan tool=${tool_name} file=${fp} ftype=${ftype} count=${prompt_count} codes=${prompt_codes}"
+
   # Model selection based on violation complexity
-  local count
-  count=$(echo "${violations_json}" | jaq 'length' 2>/dev/null || echo "0")
+  local count="${prompt_count}"
 
   local model=""
   local tier_max_turns=""
@@ -301,13 +360,13 @@ spawn_fix_subprocess() {
   else
     # Check for opus-level codes
     local has_opus_codes="false"
-    if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+    if echo "${prompt_violations_json}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
       has_opus_codes="true"
     fi
 
     # Check for sonnet-level codes
     local has_sonnet_codes="false"
-    if echo "${violations_json}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+    if echo "${prompt_violations_json}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
       has_sonnet_codes="true"
     fi
 
@@ -324,7 +383,7 @@ spawn_fix_subprocess() {
   # Warn about violation codes that don't match any tier pattern
   if [[ "${model}" == "haiku" ]] && [[ -z "${GLOBAL_MODEL_OVERRIDE}" ]]; then
     local unmatched_codes
-    unmatched_codes=$(echo "${violations_json}" | jaq -r '.[].code' 2>/dev/null | sort -u) || true
+    unmatched_codes=$(echo "${prompt_violations_json}" | jaq -r '.[].code' 2>/dev/null | sort -u) || true
     while IFS= read -r code; do
       [[ -z "${code}" ]] && continue
       local matched="false"
@@ -334,7 +393,7 @@ spawn_fix_subprocess() {
       if [[ "${matched}" == "false" ]]; then
         echo "[hook:warning] unmatched pattern '${code}', defaulting to haiku" >&2
       fi
-    done <<< "${unmatched_codes}"
+    done <<<"${unmatched_codes}"
   fi
 
   # Resolve per-tier settings
@@ -393,7 +452,7 @@ spawn_fix_subprocess() {
     prompt="You are a markdown fixer. Fix ALL violations in ${fp}.
 
 VIOLATIONS:
-${violations_json}
+${prompt_violations_json}
 
 MARKDOWN FIX STRATEGIES:
 - MD013 (line length >80): SHORTEN content, don't wrap. Examples:
@@ -408,16 +467,21 @@ MARKDOWN FIX STRATEGIES:
 RULES:
 1. Use targeted Edit operations - fix specific lines, never rewrite entire file
 2. For tables: edit the ENTIRE row in one Edit to keep columns consistent
-3. Run: ${format_cmd}
-4. Verify with: markdownlint-cli2 --no-globs '${fp}'
+3. The hook pipeline will auto-format and re-run validation after your edits
+
 
 Be concise. No explanations in the file."
-  elif [[ "${ftype}" == "python" ]] && echo "${violations_json}" | jaq -e '[.[] | select(.code | startswith("D"))] | length > 0' >/dev/null 2>&1; then
+  elif [[ "${ftype}" == "python" ]] && echo "${prompt_violations_json}" | jaq -e '[.[] | select(.code | test("^D[0-9]+$"))] | length > 0' >/dev/null 2>&1; then
     # Python with docstring violations - specialized prompt
+    # __init__.py-specific D100 hint (conditional)
+    local init_hint=""
+    if [[ "$(basename "${fp}")" == "__init__.py" ]]; then
+      init_hint=$'\n- For __init__.py: D100 needs module docstring at top of file. Keep minimal (one-line).'
+    fi
     prompt="You are a docstring fixer. Fix ALL docstring violations in ${fp}.
 
 VIOLATIONS:
-${violations_json}
+${prompt_violations_json}
 
 DOCSTRING FIX STRATEGIES:
 - D401 (imperative mood): Change 'Returns the value' -> 'Return the value', 'Gets data' -> 'Get data'
@@ -425,15 +489,15 @@ DOCSTRING FIX STRATEGIES:
 - D205 (blank line): Add blank line after one-line summary
 - D400/D415 (trailing punctuation): Add period at end of first line
 - D301 (backslash): Use raw docstring r\"\"\" for regex patterns
-- D100/D104 (module/package): Add module-level docstring at file start
+- D100/D104 (module/package): Add module-level docstring at file start${init_hint}
 - D107 (__init__): Add docstring explaining initialization parameters
 
 RULES:
 1. Use targeted Edit operations - fix specific docstrings, never rewrite entire file
 2. Preserve existing docstring content, only fix the specific violation
 3. Follow Google docstring style (Args:, Returns:, Raises:)
-4. After fixing, run: ${format_cmd}
-5. Verify with: ruff check --select=D '${fp}'
+4. The hook pipeline will auto-format and re-run validation after your edits
+
 
 Be concise. Fix docstrings only, do not refactor code."
   else
@@ -441,14 +505,14 @@ Be concise. Fix docstrings only, do not refactor code."
     prompt="You are a code quality fixer. Fix ALL violations listed below in ${fp}.
 
 VIOLATIONS:
-${violations_json}
+${prompt_violations_json}
 
 RULES:
 1. Use targeted Edit operations only - never rewrite the entire file
 2. Fix each violation at its reported line/column
-3. After fixing, run the formatter: ${format_cmd}
-4. Verify by re-running the linter
-5. If a violation cannot be fixed, explain why
+3. The hook pipeline will auto-format and re-run validation after your edits
+
+4. If a violation cannot be fixed, explain why
 
 Do not add comments explaining fixes. Do not refactor beyond what's needed."
   fi
@@ -473,7 +537,6 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
     return 0
   fi
 
-
   # Resolve settings file: config override > project-local default
   local settings_file
   settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
@@ -493,7 +556,7 @@ Do not add comments explaining fixes. Do not refactor beyond what's needed."
       echo "[hook:error] failed to create temp file for settings" >&2
       return 1
     }
-    cat > "${tmpfile}" << 'SETTINGS_EOF'
+    cat >"${tmpfile}" <<'SETTINGS_EOF'
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "disableAllHooks": true,
@@ -503,7 +566,7 @@ SETTINGS_EOF
     if mv "${tmpfile}" "${settings_file}" 2>/dev/null; then
       echo "[hook:warning] created missing ${settings_file}" >&2
     else
-      rm -f "${tmpfile}"  # Lost race - another process created it first
+      rm -f "${tmpfile}" # Lost race - another process created it first
     fi
   fi
   # Use timeout if available (requires GNU coreutils on macOS: brew install coreutils)
@@ -515,7 +578,7 @@ SETTINGS_EOF
 
   # Tool universe for --disallowedTools derivation (pinned to cc_tested_version)
   # Update when upgrading cc_tested_version in config.json
-  local tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task"
+  local tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task,AskUserQuestion,EnterPlanMode,ExitPlanMode"
   local allowed_tools="${tier_tools}"
 
   # Derive disallowed tools: universe minus allowed
@@ -559,14 +622,17 @@ SETTINGS_EOF
   if [[ -n "${disallowed_tools}" ]]; then
     disallowed_flag=(--disallowedTools "${disallowed_tools}")
   fi
-  ${timeout_cmd} "${claude_cmd}" -p "${prompt}" \
+  local delegate_started=${SECONDS}
+  hook_diag "phase=delegate_start tool=${tool_name} file=${fp} ftype=${ftype} model=${model} max_turns=${tier_max_turns} timeout=${effective_timeout} allowed_tools=${allowed_tools} count=${prompt_count} codes=${prompt_codes}"
+  subprocess_exit=0
+  ${timeout_cmd} env -u CLAUDECODE "${claude_cmd}" -p "${prompt}" \
     --dangerously-skip-permissions \
+    --setting-sources "" \
     --settings "${settings_file}" \
     "${disallowed_flag[@]}" \
     --max-turns "${tier_max_turns}" \
     --model "${model}" \
-    "${fp}" >/dev/null
-  subprocess_exit=$?
+    "${fp}" >/dev/null || subprocess_exit=$?
 
   # Detect file modification
   local file_hash_after=""
@@ -578,6 +644,10 @@ SETTINGS_EOF
   else
     echo "[hook:subprocess] file unchanged" >&2
   fi
+  local delegate_duration=$((SECONDS - delegate_started))
+  local _changed="no"
+  [[ "${file_hash_before}" != "${file_hash_after}" ]] && _changed="yes"
+  hook_diag "phase=delegate_end tool=${tool_name} file=${fp} ftype=${ftype} model=${model} exit=${subprocess_exit} changed=${_changed} duration_s=${delegate_duration}"
 
   # Report subprocess failures (but don't fail the hook)
   if [[ "${subprocess_exit}" -ne 0 ]]; then
@@ -678,21 +748,38 @@ rerun_phase2() {
   local fp="$1"
   local ftype="$2"
   local count=0
+  RERUN_PHASE2_RAW=""
+  RERUN_PHASE2_COUNT=0
+  RERUN_PHASE2_CODES=""
 
   case "${ftype}" in
     python)
+      local all_codes=""
+
       # Ruff violations
       local v
       v=$(ruff check --preview --output-format=json "${fp}" 2>/dev/null) || true
-      count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
+      count=$(echo "${v}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
+      RERUN_PHASE2_RAW="${v}"
+      local ruff_codes
+      # shellcheck disable=SC2016
+      ruff_codes=$(echo "${v}" | jaq -r '[.[].code // empty] | unique | join(", ")' 2>/dev/null) || ruff_codes=""
+      [[ -n "${ruff_codes}" ]] && all_codes="${ruff_codes}"
 
       # ty violations (uv run for project venv)
       if command -v uv >/dev/null 2>&1; then
         local ty_out
         ty_out=$(uv run ty check --output-format gitlab "${fp}" 2>/dev/null) || true
         local ty_count
-        ty_count=$(echo "${ty_out}" | jaq 'length' 2>/dev/null || echo "0")
+        ty_count=$(echo "${ty_out}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
         count=$((count + ty_count))
+        local ty_codes=""
+        if [[ "${ty_count}" -gt 0 ]]; then
+          # shellcheck disable=SC2016
+          ty_codes=$(echo "${ty_out}" | jaq -r '[.[].check_name // empty] | unique | join(", ")' 2>/dev/null) || ty_codes=""
+          [[ -z "${ty_codes}" ]] && ty_codes=$(echo "${ty_out}" | grep -oE '\[[a-z-]+\]' | tr -d '[]' | sort -u | paste -sd ', ' -) || true
+        fi
+        [[ -n "${ty_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${ty_codes}"
       fi
 
       # flake8-pydantic violations (uv run for project venv)
@@ -703,6 +790,9 @@ rerun_phase2() {
           local pyd_count
           pyd_count=$(echo "${pyd_out}" | wc -l | tr -d ' ')
           count=$((count + pyd_count))
+          local pyd_codes=""
+          pyd_codes=$(echo "${pyd_out}" | grep -oE 'PYD[0-9]+' | sort -u | paste -sd ', ' -) || pyd_codes=""
+          [[ -n "${pyd_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${pyd_codes}"
         fi
       fi
 
@@ -714,6 +804,7 @@ rerun_phase2() {
           local vulture_count
           vulture_count=$(echo "${vulture_out}" | wc -l | tr -d ' ')
           count=$((count + vulture_count))
+          [[ -n "${vulture_out}" ]] && all_codes="${all_codes:+${all_codes}, }unused-code"
         fi
       fi
 
@@ -722,8 +813,14 @@ rerun_phase2() {
         local bandit_out
         bandit_out=$(uv run bandit -f json -q "${fp}" 2>/dev/null) || true
         local bandit_count
-        bandit_count=$(echo "${bandit_out}" | jaq '.results | length // 0' 2>/dev/null || echo "0")
+        bandit_count=$(echo "${bandit_out}" | jaq '.results | length // 0' 2>/dev/null | head -n1 || echo "0")
         count=$((count + bandit_count))
+        local bandit_codes=""
+        if [[ "${bandit_count}" -gt 0 ]]; then
+          # shellcheck disable=SC2016
+          bandit_codes=$(echo "${bandit_out}" | jaq -r '[.results[].test_id // empty] | unique | join(", ")' 2>/dev/null) || bandit_codes=""
+        fi
+        [[ -n "${bandit_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${bandit_codes}"
       fi
 
       # flake8-async violations
@@ -734,14 +831,20 @@ rerun_phase2() {
           local async_count
           async_count=$(echo "${async_out}" | wc -l | tr -d ' ')
           count=$((count + async_count))
+          local async_codes=""
+          async_codes=$(echo "${async_out}" | grep -oE 'ASYNC[0-9]+' | sort -u | paste -sd ', ' -) || async_codes=""
+          [[ -n "${async_codes}" ]] && all_codes="${all_codes:+${all_codes}, }${async_codes}"
         fi
       fi
+
+      RERUN_PHASE2_CODES="${all_codes}"
       ;;
     shell)
       if command -v shellcheck >/dev/null 2>&1; then
         local v
         v=$(shellcheck -f json "${fp}" 2>/dev/null) || true
-        count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
+        count=$(echo "${v}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
+        RERUN_PHASE2_RAW="${v}"
       fi
       ;;
     yaml)
@@ -749,6 +852,7 @@ rerun_phase2() {
         local v
         v=$(yamllint -f parsable "${fp}" 2>/dev/null || true)
         [[ -n "${v}" ]] && count=$(echo "${v}" | wc -l | tr -d ' ')
+        RERUN_PHASE2_RAW="${v}"
       fi
       ;;
     json)
@@ -762,6 +866,7 @@ rerun_phase2() {
         local v
         v=$(RUST_LOG=error taplo check "${fp}" 2>&1) || true
         [[ -n "${v}" ]] && count=1
+        RERUN_PHASE2_RAW="${v}"
       fi
       ;;
     markdown)
@@ -771,13 +876,15 @@ rerun_phase2() {
         if [[ -n "${v}" ]] && ! echo "${v}" | grep -q "Summary: 0 error"; then
           count=$(echo "${v}" | grep -c ":" || echo "1")
         fi
+        RERUN_PHASE2_RAW="${v}"
       fi
       ;;
     dockerfile)
       if command -v hadolint >/dev/null 2>&1; then
         local v
         v=$(hadolint --no-color -f json "${fp}" 2>/dev/null) || true
-        count=$(echo "${v}" | jaq 'length' 2>/dev/null || echo "0")
+        count=$(echo "${v}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
+        RERUN_PHASE2_RAW="${v}"
       fi
       ;;
     typescript)
@@ -794,14 +901,59 @@ rerun_phase2() {
         biome_out=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} lint --reporter=json "${rel_path}") 2>/dev/null || true)
         if [[ -n "${biome_out}" ]]; then
           count=$(echo "${biome_out}" | jaq '[(.diagnostics // [])[] |
-            select(.severity == "error" or .severity == "warning")] | length' 2>/dev/null || echo "0")
+            select(.severity == "error" or .severity == "warning")] | length' 2>/dev/null | head -n1 || echo "0")
         fi
+        RERUN_PHASE2_RAW="${biome_out}"
       fi
       ;;
     *) ;; # Unknown file type
   esac
 
-  echo "${count}"
+  RERUN_PHASE2_COUNT="${count}"
+}
+
+# Extract violation codes from RERUN_PHASE2_RAW for directive messages.
+# Sets global VIOLATION_CODES (comma-separated string).
+extract_violation_codes() {
+  local ftype="$1"
+  VIOLATION_CODES=""
+
+  if [[ -z "${RERUN_PHASE2_RAW:-}" ]] && [[ -z "${RERUN_PHASE2_CODES:-}" ]]; then
+    return
+  fi
+
+  case "${ftype}" in
+    python)
+      if [[ -n "${RERUN_PHASE2_CODES:-}" ]]; then
+        VIOLATION_CODES="${RERUN_PHASE2_CODES}"
+      else
+        # shellcheck disable=SC2016 # jaq uses $var, not shell
+        VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[.[].code] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      fi
+      ;;
+    shell)
+      # shellcheck disable=SC2016
+      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[.[] | "SC" + (.code | tostring)] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      ;;
+    markdown)
+      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | grep -oE 'MD[0-9]+(/[a-z-]+)?' | sort -u | paste -sd ', ' -) || VIOLATION_CODES=""
+      ;;
+    yaml)
+      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | grep -oE '\([^)]+\)' | tr -d '()' | sort -u | paste -sd ', ' -) || VIOLATION_CODES=""
+      ;;
+    dockerfile)
+      # shellcheck disable=SC2016
+      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[.[].code] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      ;;
+    toml)
+      VIOLATION_CODES="TOML_SYNTAX"
+      ;;
+    typescript)
+      # shellcheck disable=SC2016
+      VIOLATION_CODES=$(echo "${RERUN_PHASE2_RAW}" | jaq -r '[(.diagnostics // [])[] | .category // empty] | unique | join(", ")' 2>/dev/null) || VIOLATION_CODES=""
+      ;;
+    *) ;;
+  esac
 }
 
 # ============================================================================
@@ -825,14 +977,14 @@ _handle_semgrep_session() {
       touch "${session_file}.done"
       if command -v semgrep >/dev/null 2>&1 && [[ -f "${CLAUDE_PROJECT_DIR:-.}/.semgrep.yml" ]]; then
         local semgrep_files
-        semgrep_files=$(sort -u "${session_file}" | tr '\n' ' ')
+        semgrep_files=$(sort -u "${session_file}" | tr '\n' ' ') || semgrep_files=""
         local semgrep_result
         # shellcheck disable=SC2086  # Intentional word splitting for file list
         semgrep_result=$(semgrep --json --config "${CLAUDE_PROJECT_DIR:-.}/.semgrep.yml" \
           ${semgrep_files} 2>/dev/null || true)
         if [[ -n "${semgrep_result}" ]]; then
           local finding_count
-          finding_count=$(echo "${semgrep_result}" | jaq '.results | length' 2>/dev/null || echo "0")
+          finding_count=$(echo "${semgrep_result}" | jaq '.results | length' 2>/dev/null | head -n1 || echo "0")
           if [[ "${finding_count}" -gt 0 ]]; then
             {
               echo ""
@@ -892,6 +1044,8 @@ _validate_nursery_config() {
   local biome_nursery
   biome_nursery=$(jaq -r '.linter.rules.nursery // "off"' "${biome_json}" 2>/dev/null || echo "")
 
+  # Object-valued nursery is fully controlled by biome.json — string comparison not applicable
+  [[ "${biome_nursery}" == "{"* || "${biome_nursery}" == "["* ]] && return
   # Normalize: biome.json uses severity strings, config.json uses warn/error/off
   if [[ -n "${biome_nursery}" ]] && [[ "${biome_nursery}" != "null" ]] \
     && [[ "${config_nursery}" != "${biome_nursery}" ]]; then
@@ -928,7 +1082,7 @@ handle_typescript() {
 
   # SFC handling (D4): .vue/.svelte/.astro -> Semgrep only, skip Biome
   case "${ext}" in
-    vue|svelte|astro)
+    vue | svelte | astro)
       local sfc_warned="/tmp/.sfc_warned_${ext}_${SESSION_PID}"
       if [[ ! -f "${sfc_warned}" ]]; then
         touch "${sfc_warned}"
@@ -987,7 +1141,7 @@ handle_typescript() {
 
   if [[ -n "${biome_output}" ]]; then
     local diag_count
-    diag_count=$(echo "${biome_output}" | jaq '.diagnostics | length' 2>/dev/null || echo "0")
+    diag_count=$(echo "${biome_output}" | jaq '.diagnostics | length' 2>/dev/null | head -n1 || echo "0")
 
     if [[ "${diag_count}" -gt 0 ]]; then
       # Convert Biome diagnostics to standard format
@@ -1017,7 +1171,7 @@ handle_typescript() {
       if [[ "${nursery_mode}" == "warn" ]]; then
         local nursery_count
         nursery_count=$(echo "${biome_output}" | jaq '[(.diagnostics // [])[] |
-          select(.category | startswith("lint/nursery/"))] | length' 2>/dev/null || echo "0")
+          select(.category | startswith("lint/nursery/"))] | length' 2>/dev/null | head -n1 || echo "0")
         if [[ "${nursery_count}" -gt 0 ]]; then
           echo "[hook:advisory] Biome nursery: ${nursery_count} diagnostic(s)" >&2
         fi
@@ -1044,10 +1198,11 @@ case "${file_path}" in
   *.json) file_type="json" ;;
   *.toml) file_type="toml" ;;
   *.md | *.mdx) file_type="markdown" ;;
-  *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.mts|*.cts|*.css) file_type="typescript" ;;
-  *.vue|*.svelte|*.astro) file_type="typescript" ;;
-  Dockerfile | Dockerfile.* | */Dockerfile | */Dockerfile.* | *.dockerfile) file_type="dockerfile" ;;
-  *) exit 0 ;; # Unsupported
+  *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs | *.mts | *.cts | *.css) file_type="typescript" ;;
+  *.vue | *.svelte | *.astro) file_type="typescript" ;;
+  Dockerfile | Dockerfile.* | */Dockerfile | */Dockerfile.* | *.dockerfile | *.Dockerfile) file_type="dockerfile" ;;
+  *.ipynb) exit_json ;; # Notebook — no cell-level linting
+  *) exit_json ;;       # Unsupported
 esac
 
 # Determine file type and run appropriate linter
@@ -1155,7 +1310,7 @@ case "${file_path}" in
           msg=$(echo "${line}" | sed -E 's/^[^:]*:[0-9]+:[0-9]+: [A-Z0-9]+ (.*)/\1/')
           jaq -n --arg l "${line_num}" --arg c "${col_num}" --arg cd "${code}" --arg m "${msg}" \
             '{line:($l|tonumber),column:($c|tonumber),code:$cd,message:$m,linter:"flake8-pydantic"}'
-        done | jaq -s '.')
+        done | jaq -s '.') || pyd_json="[]"
         if [[ -n "${pyd_json}" ]]; then
           _merged=$(echo "${collected_violations}" "${pyd_json}" \
             | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
@@ -1182,7 +1337,7 @@ case "${file_path}" in
           msg=$(echo "${line}" | sed -E 's/^[^:]*:[0-9]+: (.*)/\1/')
           jaq -n --arg l "${line_num}" --arg m "${msg}" \
             '{line:($l|tonumber),column:1,code:"VULTURE",message:$m,linter:"vulture"}'
-        done | jaq -s '.')
+        done | jaq -s '.') || vulture_json="[]"
         if [[ -n "${vulture_json}" ]] && [[ "${vulture_json}" != "[]" ]]; then
           _merged=$(echo "${collected_violations}" "${vulture_json}" \
             | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
@@ -1234,7 +1389,7 @@ case "${file_path}" in
           jaq -n --arg l "${line_num}" --arg c "${col_num}" --arg cd "${code}" \
             --arg m "${msg}" \
             '{line:($l|tonumber),column:($c|tonumber),code:$cd,message:$m,linter:"flake8-async"}'
-        done | jaq -s '.')
+        done | jaq -s '.') || async_json="[]"
         if [[ -n "${async_json}" ]]; then
           _merged=$(echo "${collected_violations}" \
             "${async_json}" | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
@@ -1294,7 +1449,7 @@ case "${file_path}" in
           code=$(echo "${line}" | sed -E 's/.*\(([^)]+)\).*/\1/' || echo "unknown")
           jaq -n --arg l "${line_num}" --arg c "${col_num}" --arg cd "${code}" --arg m "${msg}" \
             '{line:($l|tonumber),column:($c|tonumber),code:$cd,message:$m,linter:"yamllint"}'
-        done | jaq -s '.')
+        done | jaq -s '.') || yaml_json="[]"
         if [[ -n "${yaml_json}" ]]; then
           _merged=$(echo "${collected_violations}" "${yaml_json}" \
             | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
@@ -1315,7 +1470,7 @@ case "${file_path}" in
       # Collect JSON syntax error
       # shellcheck disable=SC2016 # $m is a jaq variable, not shell
       json_violation=$(jaq -n --arg m "${json_error}" \
-        '[{line:1,column:1,code:"JSON_SYNTAX",message:$m,linter:"jaq"}]')
+        '[{line:1,column:1,code:"JSON_SYNTAX",message:$m,linter:"jaq"}]') || json_violation="[]"
       _merged=$(echo "${collected_violations}" "${json_violation}" \
         | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
       [[ -n "${_merged}" ]] && collected_violations="${_merged}"
@@ -1361,7 +1516,7 @@ case "${file_path}" in
     # Requires hadolint >= 2.12.0 for disable-ignore-pragma support
     if command -v hadolint >/dev/null 2>&1; then
       # Version check (warn if too old, don't block)
-      hadolint_version=$(hadolint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+      hadolint_version=$(hadolint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1) || hadolint_version=""
       if [[ -n "${hadolint_version}" ]]; then
         major="${hadolint_version%%.*}"
         minor="${hadolint_version#*.}"
@@ -1407,7 +1562,7 @@ case "${file_path}" in
         # Collect TOML syntax error
         # shellcheck disable=SC2016
         toml_violation=$(jaq -n --arg m "${taplo_check}" \
-          '[{line:1,column:1,code:"TOML_SYNTAX",message:$m,linter:"taplo"}]')
+          '[{line:1,column:1,code:"TOML_SYNTAX",message:$m,linter:"taplo"}]') || toml_violation="[]"
         _merged=$(echo "${collected_violations}" "${toml_violation}" \
           | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
         [[ -n "${_merged}" ]] && collected_violations="${_merged}"
@@ -1455,7 +1610,7 @@ case "${file_path}" in
           msg=$(echo "${line}" | sed -E 's/.*MD[0-9]+[^[:alnum:]]*(.+)/\1/' | sed 's/^ *//')
           jaq -n --arg l "${line_num}" --arg cd "${code}" --arg m "${msg}" \
             '{line:($l|tonumber),column:1,code:$cd,message:$m,linter:"markdownlint"}'
-        done | jaq -s '.')
+        done | jaq -s '.') || md_json="[]"
         if [[ -n "${md_json}" ]] && [[ "${md_json}" != "[]" ]]; then
           _merged=$(echo "${collected_violations}" "${md_json}" \
             | jaq -s '.[0] + .[1]' 2>/dev/null) || _merged=""
@@ -1476,21 +1631,27 @@ esac
 
 # If no issues, exit clean
 if [[ "${has_issues}" = false ]]; then
-  exit 0
+  exit_json
 fi
 
 # Calculate model selection for debugging/testing
 # This runs before HOOK_SKIP_SUBPROCESS check so tests can verify model selection
 if [[ "${HOOK_DEBUG_MODEL:-}" == "1" ]]; then
-  count=$(echo "${collected_violations}" | jaq 'length' 2>/dev/null || echo "0")
+  # Align with real delegation: filter to D-only subset for Python docstring cases
+  debug_violations_json="${collected_violations}"
+  if [[ "${file_type}" == "python" ]] && echo "${collected_violations}" | jaq -e '[.[] | select(.code | test("^D[0-9]+$"))] | length > 0' >/dev/null 2>&1; then
+    debug_violations_json=$(echo "${collected_violations}" | jaq -c '[.[] | select(.code | test("^D[0-9]+$"))]' 2>/dev/null) || debug_violations_json="${collected_violations}"
+  fi
+
+  count=$(echo "${debug_violations_json}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
 
   debug_has_opus_codes="false"
-  if echo "${collected_violations}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+  if echo "${debug_violations_json}" | jaq -e '[.[] | select(.code | test("'"${OPUS_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
     debug_has_opus_codes="true"
   fi
 
   debug_has_sonnet_codes="false"
-  if echo "${collected_violations}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
+  if echo "${debug_violations_json}" | jaq -e '[.[] | select(.code | test("'"${SONNET_CODE_PATTERN}"'"))] | length > 0' >/dev/null 2>&1; then
     debug_has_sonnet_codes="true"
   fi
 
@@ -1508,9 +1669,9 @@ fi
 # Testing mode: skip subprocess and report violations directly
 # Usage: HOOK_SKIP_SUBPROCESS=1 ./multi_linter.sh
 if [[ "${HOOK_SKIP_SUBPROCESS:-}" == "1" ]]; then
-  skip_count=$(echo "${collected_violations}" | jaq 'length' 2>/dev/null || echo "0")
+  skip_count=$(echo "${collected_violations}" | jaq 'length' 2>/dev/null | head -n1 || echo "0")
   if [[ "${skip_count}" -eq 0 ]]; then
-    exit 0
+    exit_json
   fi
   echo "[hook] ${collected_violations}" >&2
   exit 2
@@ -1523,13 +1684,35 @@ if [[ ${sub_enabled} -eq 0 ]] && [[ -z "${HOOK_SKIP_SUBPROCESS:-}" ]]; then
 fi
 
 # Verify: re-run Phase 1 + Phase 2
+_verify_started=${SECONDS}
+hook_diag "phase=verify_start tool=${tool_name} file=${file_path} ftype=${file_type}"
+
+_p1_started=${SECONDS}
+hook_diag "phase=rerun_phase1_start tool=${tool_name} file=${file_path} ftype=${file_type}"
 rerun_phase1 "${file_path}" "${file_type}"
-remaining=$(rerun_phase2 "${file_path}" "${file_type}" | tail -1)
+hook_diag "phase=rerun_phase1_end tool=${tool_name} file=${file_path} ftype=${file_type} duration_s=$((SECONDS - _p1_started))"
+
+_p2_started=${SECONDS}
+hook_diag "phase=rerun_phase2_start tool=${tool_name} file=${file_path} ftype=${file_type}"
+rerun_phase2 "${file_path}" "${file_type}"
+_remaining_codes=$(echo "${RERUN_PHASE2_RAW:-[]}" | jaq -r '[.[].code] | sort | unique | join(",")' 2>/dev/null || echo "")
+hook_diag "phase=rerun_phase2_end tool=${tool_name} file=${file_path} ftype=${file_type} duration_s=$((SECONDS - _p2_started)) remaining_count=${RERUN_PHASE2_COUNT} remaining_codes=${_remaining_codes}"
+
+remaining="${RERUN_PHASE2_COUNT}"
+hook_diag "phase=verify_end tool=${tool_name} file=${file_path} ftype=${file_type} remaining_count=${remaining} remaining_codes=${_remaining_codes} duration_s=$((SECONDS - _verify_started))"
 
 if [[ "${remaining}" -eq 0 ]]; then
-  exit 0 # Fixed successfully
+  hook_diag "phase=resolved tool=${tool_name} file=${file_path} ftype=${file_type} remaining=0"
+  exit_json "Phase 3 resolved all violations."
 else
-  echo "[hook:feedback-loop] delivered ${remaining} violations for ${file_path}" >&2
-  echo "[hook] ${remaining} violation(s) remain after delegation" >&2
+  extract_violation_codes "${file_type}"
+  _base_name=$(basename "${file_path}")
+  if [[ -n "${VIOLATION_CODES}" ]]; then
+    hook_json "${remaining} violation(s) in ${_base_name}: ${VIOLATION_CODES}. Fix them."
+  else
+    hook_json "${remaining} violation(s) in ${_base_name}. Fix them."
+  fi
+  hook_diag "phase=feedback_loop tool=${tool_name} file=${file_path} ftype=${file_type} remaining_count=${remaining} remaining_codes=${VIOLATION_CODES:-}"
+  echo "[hook:feedback-loop] delivered ${remaining} for ${file_path}" >&2
   exit 2
 fi

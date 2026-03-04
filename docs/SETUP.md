@@ -21,13 +21,44 @@ The wizard will:
 
 If you prefer manual setup, follow these steps.
 
+**Linux users:** many tools install to `~/.local/bin/` or
+`~/.cargo/bin/`. Make sure both directories are on your
+PATH. Add this to your shell profile if needed:
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+```
+
 ## core dependencies
 
 jaq and ruff are required for all languages. uv is the
 package runner that invokes most Python-based linting tools.
 
+**macOS:**
+
 ```bash
 brew install jaq ruff uv
+```
+
+**Linux:**
+
+```bash
+# ruff — standalone installer
+curl -LsSf https://astral.sh/ruff/install.sh | sh
+
+# uv — standalone installer
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# jaq — build from source (requires cargo/rustc)
+cargo install jaq
+```
+
+Both installers place binaries in `~/.local/bin/`. If
+`cargo install` puts jaq elsewhere (e.g. `~/.cargo/bin/`),
+add that directory to your PATH or symlink the binary:
+
+```bash
+ln -sf ~/.cargo/bin/jaq ~/.local/bin/jaq
 ```
 
 jaq is a Rust-based jq alternative used internally by the
@@ -38,11 +69,13 @@ flake8) from the project's virtual environment.
 After installing the core three, run:
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --no-install-project
 ```
 
-This installs most Python linting tools from pyproject.toml
-into your project's virtual environment.
+The `--no-install-project` flag is required because the
+pyproject.toml declares a build system but has no source
+package to install. This installs all Python linting tools
+from pyproject.toml into your project's virtual environment.
 
 ## python
 
@@ -65,12 +98,12 @@ Optional tools (all installed via `uv sync --all-extras`):
 Install everything at once:
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --no-install-project
 ```
 
-Gotcha: bandit and security linters exclude tests/, docs/,
-and .venv/ by default. You can customize these paths via the
-`exclusions` array in `.claude/hooks/config.json`.
+Gotcha: Python security linters only exclude infrastructure paths by default
+(`.venv/`, `node_modules/`, `.git/`). You can customize these paths via the
+`security_linter_exclusions` array in `.claude/hooks/config.json`.
 
 ## typescript
 
@@ -125,8 +158,21 @@ Sub-options you can set in the typescript config object:
 
 Optional: shfmt (formatting) and shellcheck (linting).
 
+**macOS:**
+
 ```bash
 brew install shfmt shellcheck
+```
+
+**Linux:**
+
+```bash
+# shellcheck — available via apt on most distros
+sudo apt-get install -y shellcheck
+
+# shfmt — via go install (requires go), or download binary
+# from https://github.com/mvdan/sh/releases
+go install mvdan.cc/sh/v3/cmd/shfmt@latest
 ```
 
 shfmt auto-formats shell scripts in Phase 1 with `shfmt -w`.
@@ -138,8 +184,19 @@ gracefully skipped if not installed.
 
 Optional: yamllint.
 
+**macOS:**
+
 ```bash
 brew install yamllint
+```
+
+**Linux:** yamllint is installed as a Python dev dependency
+by `uv sync --all-extras --no-install-project`. It lands in
+`.venv/bin/yamllint`, which may not be on your PATH. Either
+activate the venv or create a symlink:
+
+```bash
+ln -sf "$(pwd)/.venv/bin/yamllint" ~/.local/bin/yamllint
 ```
 
 yamllint enforces all 23 rules explicitly configured in the
@@ -154,6 +211,17 @@ Optional: markdownlint-cli2.
 npm install -g markdownlint-cli2
 ```
 
+Note: `bun install -g markdownlint-cli2` installs the
+package but may not create a binary on PATH. If `command -v
+markdownlint-cli2` fails after a bun global install, create
+a wrapper script:
+
+```bash
+printf '#!/bin/sh\nexec bunx markdownlint-cli2 "$@"\n' \
+  > ~/.local/bin/markdownlint-cli2
+chmod +x ~/.local/bin/markdownlint-cli2
+```
+
 Enforces heading style, line length (80 chars), list
 formatting, and fenced code block language tags. Some rules
 support auto-fix in Phase 1. Config lives in
@@ -163,8 +231,17 @@ support auto-fix in Phase 1. Config lives in
 
 Optional: hadolint (version >= 2.12.0 recommended).
 
+**macOS:**
+
 ```bash
 brew install hadolint
+```
+
+**Linux:**
+
+```bash
+curl -L "https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64" \
+  -o ~/.local/bin/hadolint && chmod +x ~/.local/bin/hadolint
 ```
 
 Enforces Dockerfile best practices at maximum strictness,
@@ -177,8 +254,23 @@ support.
 
 Optional: taplo.
 
+**macOS:**
+
 ```bash
 brew install taplo
+```
+
+**Linux:**
+
+```bash
+cargo install taplo-cli
+```
+
+If `cargo install` puts taplo in `~/.cargo/bin/`, symlink
+it:
+
+```bash
+ln -sf ~/.cargo/bin/taplo ~/.local/bin/taplo
 ```
 
 Enforces TOML formatting via `taplo fmt` in Phase 1.
@@ -260,6 +352,22 @@ TypeScript frontend:
 
 Full configuration reference in
 [docs/REFERENCE.md](REFERENCE.md).
+
+## git hooks
+
+Install pre-commit and pre-push hooks:
+
+```bash
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
+```
+
+This runs all linters at commit time and again before push.
+To run manually:
+
+```bash
+uv run pre-commit run --all-files
+```
 
 ## verify your setup
 

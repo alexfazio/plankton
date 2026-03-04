@@ -1,6 +1,11 @@
 # Pre-commit hooks for code quality enforcement
-# Install: uv add --dev pre-commit && uv run pre-commit install
-# Run: uv run pre-commit run --all-files
+# Install: uv add --dev pre-commit
+#   && uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+#     --hook-type pre-push
+# Pre-push only: uv run pre-commit install --hook-type pre-push
+# Run (repo-wide baseline): SKIP=plankton-strict-runtime-commit uv run pre-commit run --all-files
+
+default_stages: [pre-commit, pre-push]
 
 repos:
   - repo: local
@@ -69,13 +74,6 @@ repos:
     hooks:
       - id: actionlint
 
-  # === PHASE 9: MARKDOWN (pinned via npm) ===
-  - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.21.0
-    hooks:
-      - id: markdownlint-cli2
-        pass_filenames: false
-
   - repo: local
     hooks:
       # === PHASE 5: YAML ===
@@ -116,8 +114,42 @@ repos:
         stages: [pre-commit]
         verbose: true
 
+      # === RUNTIME-PARITY STRICT CHECKS (automatic on commit) ===
+      - id: plankton-strict-runtime-commit
+        name: plankton (strict runtime parity)
+        entry: ./scripts/pre_commit_plankton_strict.sh
+        language: system
+        require_serial: true
+        stages: [pre-commit]
+
+      # === RUNTIME-PARITY STRICT CHECKS (manual re-run / explicit override) ===
+      - id: plankton-strict-runtime
+        name: plankton (strict runtime parity)
+        entry: ./scripts/pre_commit_plankton_strict.sh
+        language: system
+        require_serial: true
+        stages: [manual]
+
+      # === COMMIT MESSAGE POLICY ===
+      - id: plankton-commit-msg
+        name: plankton (commit message policy)
+        entry: ./scripts/check_commit_message_no_ai_attribution.sh
+        language: system
+        stages: [commit-msg]
+
+      # === HOOK TEST SUITE (before push) ===
+      - id: plankton-hooks-pre-push
+        name: plankton (hook test suite)
+        entry: ./scripts/pre_push_plankton_hooks.sh
+        language: system
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-push]
+
 # === INTENTIONAL EXCLUSIONS ===
 # The following tools run in CC hooks and/or CI but NOT in pre-commit:
+# - markdownlint-cli2: pass_filenames=false causes it to scan gitignored docs/plans/
+#   (auto-generated reports that don't conform to style rules); removed to reduce noise
 # - vulture: High false positive rate, advisory-only (needs whitelist)
 # - bandit: Security scanning belongs in CI gates, not commit-time
 # - flake8-pydantic: Niche Pydantic feedback, real-time via CC hooks

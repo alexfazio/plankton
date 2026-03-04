@@ -1,0 +1,21 @@
+{
+  // Markdownlint configuration
+  // https://github.com/DavidAnson/markdownlint
+  //
+  // Uses default rules - provides suggestions, not blocking errors
+  // The hook treats markdown violations as INFO level (non-blocking)
+
+  // Use all default rules
+  "default": true,
+
+  // MD013: Line length
+  // Skip code blocks - they naturally have longer lines
+  // and wrapping would break their formatting
+  "MD013": {
+    "line_length": 80,
+    "code_blocks": false
+  }
+
+  // Uncomment to disable specific rules:
+  // "MD033": false   // Inline HTML
+}

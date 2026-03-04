@@ -19,8 +19,7 @@ run_self_test() {
   local failed=0
   local temp_dir
   temp_dir=$(mktemp -d)
-  trap 'rm -rf "${temp_dir}"; rm -f "${project_dir}/test_fixture_broken.toml" /tmp/.biome_path_$$ /tmp/.semgrep_session_$$ /tmp/.semgrep_session_$$.done /tmp/.jscpd_ts_session_$$ /tmp/.jscpd_session_$$ /tmp/.sfc_warned_*_$$ /tmp/.nursery_checked_$$ /tmp/.pm_warn_*_$$ /tmp/.pm_test_stderr_$$ /tmp/.pm_enforcement_$$.log' EXIT
-
+  trap 'rm -rf "${temp_dir}"; rm -f "${project_dir}/test_fixture_broken.toml" "${project_dir}/test_directive_broken.toml" /tmp/.biome_path_$$ /tmp/.semgrep_session_$$ /tmp/.semgrep_session_$$.done /tmp/.jscpd_ts_session_$$ /tmp/.jscpd_session_$$ /tmp/.sfc_warned_*_$$ /tmp/.nursery_checked_$$ /tmp/.pm_warn_*_$$ /tmp/.pm_test_stderr_$$ /tmp/.pm_enforcement_$$.log' EXIT
 
   # --- Shared test fixture (decouples tests from production config) ---
   local fixture_project_dir="${temp_dir}/fixture_project"
@@ -64,10 +63,10 @@ run_self_test() {
   # Test helper for package manager hook (enforce_package_managers.sh)
   # Sends a Bash tool_input.command JSON to the PM hook and checks the decision.
   test_bash_command() {
-    local name="$1"           # Test name
-    local command_str="$2"    # Command to test
-    local expected="$3"       # "approve" or "block"
-    local pm_dir="$4"         # CLAUDE_PROJECT_DIR override (temp dir with config)
+    local name="$1"            # Test name
+    local command_str="$2"     # Command to test
+    local expected="$3"        # "approve" or "block"
+    local pm_dir="$4"          # CLAUDE_PROJECT_DIR override (temp dir with config)
     local extra_check="${5:-}" # Optional: string to grep in stdout+stderr
 
     local json_input="{\"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"${command_str}\"}}"
@@ -109,7 +108,7 @@ run_self_test() {
     local mock_dir="$2"
     mkdir -p "${mock_dir}"
     local t t_path
-    for t in jaq grep sed tr head cat touch bash; do
+    for t in jaq grep sed tr head cat touch bash awk; do
       [[ "${t}" == "${exclude_tool}" ]] && continue
       t_path=$(command -v "${t}" 2>/dev/null || true)
       if [[ -n "${t_path}" ]]; then
@@ -291,7 +290,7 @@ def foo():
   # Create a temp project directory with TS-enabled config
   ts_project_dir="${temp_dir}/ts_project"
   mkdir -p "${ts_project_dir}/.claude/hooks"
-  cat > "${ts_project_dir}/.claude/hooks/config.json" << 'TS_CFG_EOF'
+  cat >"${ts_project_dir}/.claude/hooks/config.json" <<'TS_CFG_EOF'
 {
   "languages": {
     "python": true, "shell": true, "yaml": true, "json": true,
@@ -407,7 +406,7 @@ console.log(x);' 0
     # Uses its own config fixture with typescript disabled
     ts_disabled_dir="${temp_dir}/ts_disabled_project"
     mkdir -p "${ts_disabled_dir}/.claude/hooks"
-    cat > "${ts_disabled_dir}/.claude/hooks/config.json" << 'TS_DIS_EOF'
+    cat >"${ts_disabled_dir}/.claude/hooks/config.json" <<'TS_DIS_EOF'
 {
   "languages": {
     "python": true, "shell": true, "yaml": true, "json": true,
@@ -418,7 +417,7 @@ console.log(x);' 0
 }
 TS_DIS_EOF
     local ts_dis_file="${temp_dir}/skipped.ts"
-    echo 'const unused = "should be skipped";' > "${ts_dis_file}"
+    echo 'const unused = "should be skipped";' >"${ts_dis_file}"
     local ts_dis_json='{"tool_input": {"file_path": "'"${ts_dis_file}"'"}}'
     set +e
     echo "${ts_dis_json}" | HOOK_SKIP_SUBPROCESS=1 \
@@ -459,9 +458,9 @@ console.log(used);' \
     # Nursery rules require biome.json in project root with explicit
     # nursery config; default biome config has no lint/nursery/ rules.
     # Conditionally test if a nursery rule fires on the fixture.
-    echo "${temp_dir}/nursery.ts" > /dev/null  # placeholder path
+    echo "${temp_dir}/nursery.ts" >/dev/null # placeholder path
     local nursery_file="${temp_dir}/nursery.ts"
-    printf 'const foo = "bar";\nfunction f() { const foo = 1; console.log(foo); }\nf();\nconsole.log(foo);\n' > "${nursery_file}"
+    printf 'const foo = "bar";\nfunction f() { const foo = 1; console.log(foo); }\nf();\nconsole.log(foo);\n' >"${nursery_file}"
     local nursery_json='{"tool_input": {"file_path": "'"${nursery_file}"'"}}'
     set +e
     local nursery_out
@@ -558,7 +557,7 @@ console.log("none used");' \
     # Test 15: SFC file warning (D4)
     if ! command -v semgrep >/dev/null 2>&1; then
       local sfc_file="${temp_dir}/component.vue"
-      printf '<script>export default {}</script>\n' > "${sfc_file}"
+      printf '<script>export default {}</script>\n' >"${sfc_file}"
       local sfc_json='{"tool_input":{"file_path":"'"${sfc_file}"'"}}'
       set +e
       local sfc_out
@@ -581,7 +580,7 @@ console.log("none used");' \
     # Test 16: D3 oxlint overlap — nursery rules actually skipped
     local d3_dir="${temp_dir}/d3_project"
     mkdir -p "${d3_dir}/.claude/hooks"
-    cat > "${d3_dir}/.claude/hooks/config.json" << 'D3_CFG_EOF'
+    cat >"${d3_dir}/.claude/hooks/config.json" <<'D3_CFG_EOF'
 {
   "languages": {
     "typescript": {
@@ -605,7 +604,7 @@ console.log("none used");' \
 }
 D3_CFG_EOF
     # biome.json enables the nursery rule so it would fire without --skip
-    cat > "${d3_dir}/biome.json" << 'D3_BIOME_EOF'
+    cat >"${d3_dir}/biome.json" <<'D3_BIOME_EOF'
 {
   "linter": {
     "rules": {
@@ -617,7 +616,7 @@ D3_CFG_EOF
 }
 D3_BIOME_EOF
     # tsconfig.json required for type-aware nursery rules
-    cat > "${d3_dir}/tsconfig.json" << 'D3_TS_EOF'
+    cat >"${d3_dir}/tsconfig.json" <<'D3_TS_EOF'
 {
   "compilerOptions": {
     "strict": true,
@@ -630,7 +629,7 @@ D3_BIOME_EOF
 D3_TS_EOF
     # File with floating promise (triggers noFloatingPromises)
     local d3_file="${d3_dir}/d3_test.ts"
-    cat > "${d3_file}" << 'D3_SRC_EOF'
+    cat >"${d3_file}" <<'D3_SRC_EOF'
 async function fetchData(): Promise<string> {
   return "data";
 }
@@ -648,7 +647,7 @@ D3_SRC_EOF
     # With oxlint_tsgolint=true, --skip suppresses the 3 overlap rules
     # Match lint violation format (lint/nursery/...) not config warnings
     if echo "${d3_out}" | grep -qE \
-        'lint/nursery/noFloatingPromises|lint/nursery/noMisusedPromises|lint/nursery/useAwaitThenable'; then
+      'lint/nursery/noFloatingPromises|lint/nursery/noMisusedPromises|lint/nursery/useAwaitThenable'; then
       echo "FAIL D3 overlap: disabled rules still reported"
       echo "   Output: ${d3_out}"
       failed=$((failed + 1))
@@ -669,7 +668,7 @@ D3_SRC_EOF
   no_biome_dir="${temp_dir}/no_biome_project"
   mkdir -p "${no_biome_dir}/.claude/hooks"
   # Use js_runtime: "none" to force detect_biome() to find nothing
-  cat > "${no_biome_dir}/.claude/hooks/config.json" << 'NOBIOME_EOF'
+  cat >"${no_biome_dir}/.claude/hooks/config.json" <<'NOBIOME_EOF'
 {
   "languages": {
     "typescript": {
@@ -694,7 +693,7 @@ NOBIOME_EOF
 
   no_biome_content='const x = 1;
 console.log(x);'
-  echo "${no_biome_content}" > "${temp_dir}/no_biome.ts"
+  echo "${no_biome_content}" >"${temp_dir}/no_biome.ts"
   no_biome_json='{"tool_input": {"file_path": "'"${temp_dir}/no_biome.ts"'"}}'
   set +e
   echo "${no_biome_json}" | HOOK_SKIP_SUBPROCESS=1 \
@@ -734,12 +733,12 @@ console.log(x);'
   pm_off_js_dir="${temp_dir}/pm_off_js"
 
   for d in "${pm_project_dir}" "${pm_warn_py_dir}" "${pm_warn_js_dir}" \
-            "${pm_off_py_dir}" "${pm_off_js_dir}"; do
+    "${pm_off_py_dir}" "${pm_off_js_dir}"; do
     mkdir -p "${d}/.claude/hooks"
   done
 
   # Default: both ecosystems block mode
-  cat > "${pm_project_dir}/.claude/hooks/config.json" << 'PM_CFG_EOF'
+  cat >"${pm_project_dir}/.claude/hooks/config.json" <<'PM_CFG_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -757,7 +756,7 @@ console.log(x);'
 PM_CFG_EOF
 
   # python: warn, JS: block
-  cat > "${pm_warn_py_dir}/.claude/hooks/config.json" << 'PM_WARN_PY_EOF'
+  cat >"${pm_warn_py_dir}/.claude/hooks/config.json" <<'PM_WARN_PY_EOF'
 {
   "package_managers": {
     "python": "uv:warn",
@@ -775,7 +774,7 @@ PM_CFG_EOF
 PM_WARN_PY_EOF
 
   # python: block, JS: warn
-  cat > "${pm_warn_js_dir}/.claude/hooks/config.json" << 'PM_WARN_JS_EOF'
+  cat >"${pm_warn_js_dir}/.claude/hooks/config.json" <<'PM_WARN_JS_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -793,7 +792,7 @@ PM_WARN_PY_EOF
 PM_WARN_JS_EOF
 
   # python: disabled, JS: block
-  cat > "${pm_off_py_dir}/.claude/hooks/config.json" << 'PM_OFF_PY_EOF'
+  cat >"${pm_off_py_dir}/.claude/hooks/config.json" <<'PM_OFF_PY_EOF'
 {
   "package_managers": {
     "python": false,
@@ -811,7 +810,7 @@ PM_WARN_JS_EOF
 PM_OFF_PY_EOF
 
   # python: block, JS: disabled
-  cat > "${pm_off_js_dir}/.claude/hooks/config.json" << 'PM_OFF_JS_EOF'
+  cat >"${pm_off_js_dir}/.claude/hooks/config.json" <<'PM_OFF_JS_EOF'
 {
   "package_managers": {
     "python": "uv",
@@ -1018,6 +1017,66 @@ PM_OFF_JS_EOF
   test_bash_command "poetry diag+add compound" \
     "poetry --help && poetry add requests" "block" "${pm_project_dir}"
 
+  # === Compound Replacement Tests (multi-tool suggestion fix) ===
+  # These tests verify that compound commands with multiple blocked PMs
+  # receive a suggestion that replaces ALL blocked tools, not just the first.
+  echo ""
+  echo "--- Compound Replacement Tests ---"
+
+  # Cross-ecosystem: pip + npm (the original bug case)
+  test_bash_command "pip+npm both replaced" \
+    "pip install requests && npm install lodash" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash"
+
+  # Cross-ecosystem: pip + yarn
+  test_bash_command "pip+yarn both replaced" \
+    "pip install flask && yarn add express" "block" "${pm_project_dir}" \
+    "uv add flask && bun add express"
+
+  # Cross-ecosystem: poetry + npm
+  test_bash_command "poetry+npm both replaced" \
+    "poetry add requests && npm install lodash" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash"
+
+  # Cross-ecosystem: pipenv + pnpm
+  test_bash_command "pipenv+pnpm both replaced" \
+    "pipenv install && pnpm add react" "block" "${pm_project_dir}" \
+    "uv sync && bun add react"
+
+  # Same-ecosystem: pip + poetry (both Python -> uv)
+  test_bash_command "pip+poetry both replaced" \
+    "pip install flask && poetry add requests" "block" "${pm_project_dir}" \
+    "uv add flask && uv add requests"
+
+  # Same-ecosystem: npm + yarn (both JS -> bun)
+  test_bash_command "npm+yarn both replaced" \
+    "npm install lodash && yarn add express" "block" "${pm_project_dir}" \
+    "bun add lodash && bun add express"
+
+  # Mixed: safe command + blocked PM (only pip blocked)
+  test_bash_command "ls+pip preserves safe command" \
+    "ls -la && pip install requests" "block" "${pm_project_dir}" \
+    "ls -la && uv add requests"
+
+  # Mixed: blocked PM + safe command
+  test_bash_command "pip+ls preserves safe command" \
+    "pip install requests && ls -la" "block" "${pm_project_dir}" \
+    "uv add requests && ls -la"
+
+  # Three-segment compound
+  test_bash_command "three-segment compound" \
+    "pip install requests && npm install lodash && pip install flask" "block" "${pm_project_dir}" \
+    "uv add requests && bun add lodash && uv add flask"
+
+  # Backward compatibility: single-tool commands still work
+  test_bash_command "single pip backward compat" \
+    "pip install requests" "block" "${pm_project_dir}" \
+    "uv add requests"
+
+  test_bash_command "single npm backward compat" \
+    "npm install lodash" "block" "${pm_project_dir}" \
+    "bun add lodash"
+
   echo ""
   echo "--- Pip Download Variant ---"
   test_bash_command "pip download -d allowed" \
@@ -1187,15 +1246,15 @@ PM_OFF_JS_EOF
     return 0
   }
 
-  # Structural: rerun_phase2 call has | tail -1 guard (Step 1 regression)
-  local tail_guard
-  tail_guard=$(grep -c 'rerun_phase2.*| tail -1' \
+  # Structural: rerun_phase2 caller uses RERUN_PHASE2_COUNT global
+  local count_global
+  count_global=$(grep -c 'RERUN_PHASE2_COUNT' \
     "${script_dir}/multi_linter.sh" || true)
-  if [[ "${tail_guard}" -ge 1 ]]; then
-    echo "PASS rerun_phase2_tail_guard: | tail -1 present on rerun_phase2 call"
+  if [[ "${count_global}" -ge 2 ]]; then
+    echo "PASS rerun_phase2_count_global: RERUN_PHASE2_COUNT used in caller"
     passed=$((passed + 1))
   else
-    echo "FAIL rerun_phase2_tail_guard: | tail -1 missing from rerun_phase2 call"
+    echo "FAIL rerun_phase2_count_global: RERUN_PHASE2_COUNT not found in caller"
     failed=$((failed + 1))
   fi
 
@@ -1391,18 +1450,553 @@ console.log("test");' >"${ts_feedback_file}"
   fi
 
   echo ""
+  echo "--- Directive Code Extraction Tests ---"
+
+  # Helper: test post-subprocess exit path includes violation codes in
+  # hook_json stdout. Uses a mock claude binary that does nothing, so
+  # violations remain after "subprocess" and the directive path runs.
+  test_directive_codes() {
+    local name="$1" file="$2" content="$3" expected_pattern="$4"
+    local proj_dir="${5:-${fixture_project_dir}}"
+    echo "${content}" >"${file}"
+    local json_input='{"tool_input": {"file_path": "'"${file}"'"}}'
+
+    # Mock claude: accepts any args, exits 0, does nothing to the file
+    local mock_dir="${temp_dir}/mock_bin"
+    mkdir -p "${mock_dir}"
+    printf '#!/bin/sh\nexit 0\n' >"${mock_dir}/claude"
+    chmod +x "${mock_dir}/claude"
+
+    set +e
+    local stdout_output
+    stdout_output=$(echo "${json_input}" \
+      | PATH="${mock_dir}:${PATH}" \
+        CLAUDE_PROJECT_DIR="${proj_dir}" \
+        "${script_dir}/multi_linter.sh" 2>/dev/null)
+    local actual_exit=$?
+    set -e
+
+    if [[ "${actual_exit}" -eq 2 ]] && echo "${stdout_output}" | grep -qE "${expected_pattern}"; then
+      echo "PASS ${name}"
+      passed=$((passed + 1))
+    else
+      echo "FAIL ${name}: exit=${actual_exit}, pattern '${expected_pattern}' not in stdout"
+      echo "   stdout: ${stdout_output:0:300}"
+      failed=$((failed + 1))
+    fi
+  }
+
+  # Python: F841 (unused variable) survives ruff --fix
+  test_directive_codes "directive_codes_python" \
+    "${temp_dir}/directive_test.py" \
+    '"""Module."""
+
+
+def foo():
+    """Do foo."""
+    unused = 42
+    return 1' \
+    'F841'
+
+  # Shell: SC codes survive shfmt auto-format
+  if command -v shellcheck >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $UNQUOTED_VAR is intentional test content
+    test_directive_codes "directive_codes_shell" \
+      "${temp_dir}/directive_test.sh" \
+      '#!/bin/bash
+echo $UNQUOTED_VAR' \
+      'SC[0-9]+'
+  else
+    echo "[skip] directive_codes_shell: shellcheck not installed"
+  fi
+
+  # Markdown: MD013 (line length) can't be auto-fixed
+  if command -v markdownlint-cli2 >/dev/null 2>&1; then
+    test_directive_codes "directive_codes_markdown" \
+      "${temp_dir}/directive_test.md" \
+      '# Test
+
+This is a very long line that definitely exceeds the eighty character limit and should trigger the MD013 line length violation.' \
+      'MD013'
+  else
+    echo "[skip] directive_codes_markdown: markdownlint-cli2 not installed"
+  fi
+
+  # YAML: yamllint codes in parentheses (truthy, indentation, etc.)
+  if command -v yamllint >/dev/null 2>&1; then
+    test_directive_codes "directive_codes_yaml" \
+      "${temp_dir}/directive_test.yml" \
+      'key: value
+truthy: yes' \
+      'truthy'
+  else
+    echo "[skip] directive_codes_yaml: yamllint not installed"
+  fi
+
+  # Dockerfile: DL codes from hadolint
+  if command -v hadolint >/dev/null 2>&1; then
+    test_directive_codes "directive_codes_dockerfile" \
+      "${temp_dir}/Dockerfile" \
+      'FROM ubuntu:latest
+RUN echo hello' \
+      'DL[0-9]+'
+  else
+    echo "[skip] directive_codes_dockerfile: hadolint not installed"
+  fi
+
+  # TOML: syntax error -> TOML_SYNTAX (must be in project tree for taplo)
+  if command -v taplo >/dev/null 2>&1; then
+    local toml_directive_fixture="${project_dir}/test_directive_broken.toml"
+    printf '[broken\nkey = "value"\n' >"${toml_directive_fixture}"
+    test_directive_codes "directive_codes_toml" \
+      "${toml_directive_fixture}" \
+      '[broken
+key = "value"' \
+      'TOML_SYNTAX'
+    rm -f "${toml_directive_fixture}"
+  else
+    echo "[skip] directive_codes_toml: taplo not installed"
+  fi
+
+  # TypeScript: biome category codes (lint/...)
+  if [[ -n "${biome_cmd:-}" ]]; then
+    test_directive_codes "directive_codes_typescript" \
+      "${temp_dir}/directive_test.ts" \
+      'const unused = "x";
+console.log("test");' \
+      'lint/' "${ts_project_dir}"
+  else
+    echo "[skip] directive_codes_typescript: biome not installed"
+  fi
+
+  # Structural: rerun_phase2 sets globals (not subshell)
+  if grep -q 'RERUN_PHASE2_COUNT=' "${script_dir}/multi_linter.sh"; then
+    echo "PASS rerun_phase2_globals: RERUN_PHASE2_COUNT assignment found"
+    passed=$((passed + 1))
+  else
+    echo "FAIL rerun_phase2_globals: RERUN_PHASE2_COUNT assignment not found"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: extract_violation_codes function exists
+  if grep -q 'extract_violation_codes()' "${script_dir}/multi_linter.sh"; then
+    echo "PASS extract_fn_exists: extract_violation_codes() defined"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_fn_exists: extract_violation_codes() not defined"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: extract_violation_codes handles empty RERUN_PHASE2_RAW
+  if grep -q 'RERUN_PHASE2_RAW:-' "${script_dir}/multi_linter.sh"; then
+    echo "PASS extract_empty_guard: empty RERUN_PHASE2_RAW guard found"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_empty_guard: empty RERUN_PHASE2_RAW guard not found"
+    failed=$((failed + 1))
+  fi
+
+  # Vue warning: .ts file should NOT produce "unhandled ext" on stderr
+  if [[ -n "${biome_cmd:-}" ]]; then
+    local vue_test_file="${temp_dir}/vue_test.ts"
+    echo 'const x: string = "hello";' >"${vue_test_file}"
+    local vue_json='{"tool_input": {"file_path": "'"${vue_test_file}"'"}}'
+    set +e
+    local vue_stderr
+    vue_stderr=$(echo "${vue_json}" | HOOK_SKIP_SUBPROCESS=1 \
+      CLAUDE_PROJECT_DIR="${ts_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>&1 >/dev/null)
+    set -e
+    if echo "${vue_stderr}" | grep -q "unhandled ext in vue check"; then
+      echo "FAIL vue_ext_no_warning: spurious 'unhandled ext' warning for .ts"
+      echo "   stderr: ${vue_stderr:0:200}"
+      failed=$((failed + 1))
+    else
+      echo "PASS vue_ext_no_warning: no spurious warning for .ts"
+      passed=$((passed + 1))
+    fi
+  else
+    echo "[skip] vue_ext_no_warning: biome not installed"
+  fi
+
+  # __init__.py prompt: structural check for specific guidance
+  if grep -q '__init__\.py.*D100\|D100.*__init__\.py' "${script_dir}/multi_linter.sh"; then
+    echo "PASS init_py_prompt: __init__.py-specific guidance found"
+    passed=$((passed + 1))
+  else
+    echo "FAIL init_py_prompt: __init__.py-specific D100 guidance not found"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: exit_json helper exists
+  if grep -q 'exit_json()' "${script_dir}/multi_linter.sh"; then
+    echo "PASS exit_json_exists: exit_json() helper defined"
+    passed=$((passed + 1))
+  else
+    echo "FAIL exit_json_exists: exit_json() not defined"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: RERUN_PHASE2_CODES initialized in rerun_phase2
+  if grep -q 'RERUN_PHASE2_CODES=""' "${script_dir}/multi_linter.sh"; then
+    echo "PASS rerun_phase2_codes_init: RERUN_PHASE2_CODES initialized"
+    passed=$((passed + 1))
+  else
+    echo "FAIL rerun_phase2_codes_init: RERUN_PHASE2_CODES not initialized"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: RERUN_PHASE2_CODES assigned in python case of rerun_phase2
+  # shellcheck disable=SC2016
+  if sed -n '/^rerun_phase2()/,/^[^ ]/p' "${script_dir}/multi_linter.sh" | grep -q 'RERUN_PHASE2_CODES="${all_codes}"'; then
+    echo "PASS rerun_phase2_codes_python: RERUN_PHASE2_CODES set from all_codes"
+    passed=$((passed + 1))
+  else
+    echo "FAIL rerun_phase2_codes_python: RERUN_PHASE2_CODES not set in python case"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: extract_violation_codes guard checks RERUN_PHASE2_CODES
+  if grep -q 'RERUN_PHASE2_CODES:-' "${script_dir}/multi_linter.sh"; then
+    echo "PASS extract_codes_guard: RERUN_PHASE2_CODES checked in guard"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_codes_guard: RERUN_PHASE2_CODES not in guard"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: python case in extract_violation_codes prefers RERUN_PHASE2_CODES
+  if sed -n '/^extract_violation_codes()/,/^}/p' "${script_dir}/multi_linter.sh" | grep -q 'RERUN_PHASE2_CODES'; then
+    echo "PASS extract_python_prefers_codes: python case references RERUN_PHASE2_CODES"
+    passed=$((passed + 1))
+  else
+    echo "FAIL extract_python_prefers_codes: python case missing RERUN_PHASE2_CODES"
+    failed=$((failed + 1))
+  fi
+
+  echo ""
+  echo "--- JSON Protocol Tests ---"
+
+  # JSON Protocol: jaq missing -> valid JSON stdout
+  local mock_no_jaq="${temp_dir}/mock_no_jaq/bin"
+  mkdir -p "${mock_no_jaq}"
+  # Create a minimal PATH with only essential commands but NOT jaq
+  for cmd in bash cat grep sed printf echo head tail tr wc sort paste mkdir chmod rm; do
+    local real_path
+    real_path=$(command -v "${cmd}" 2>/dev/null) || continue
+    ln -sf "${real_path}" "${mock_no_jaq}/${cmd}"
+  done
+  local nojaq_file="${temp_dir}/nojaq_test.py"
+  echo '"""Module."""' >"${nojaq_file}"
+  local nojaq_json='{"tool_input": {"file_path": "'"${nojaq_file}"'"}}'
+  set +e
+  local nojaq_stdout
+  nojaq_stdout=$(echo "${nojaq_json}" | PATH="${mock_no_jaq}" \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nojaq_exit=$?
+  set -e
+  if [[ "${nojaq_exit}" -eq 0 ]] && echo "${nojaq_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_jaq: valid JSON when jaq missing"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_jaq: no valid JSON when jaq missing (exit=${nojaq_exit})"
+    echo "   stdout: ${nojaq_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: no file_path -> valid JSON stdout
+  set +e
+  local nopath_stdout
+  nopath_stdout=$(echo '{"tool_input": {}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nopath_exit=$?
+  set -e
+  if [[ "${nopath_exit}" -eq 0 ]] && echo "${nopath_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_path: valid JSON for missing file_path"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_path: no valid JSON for missing file_path (exit=${nopath_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: non-existent file -> valid JSON stdout
+  set +e
+  local nofile_stdout
+  nofile_stdout=$(echo '{"tool_input": {"file_path": "/tmp/does_not_exist_plankton_test.py"}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local nofile_exit=$?
+  set -e
+  if [[ "${nofile_exit}" -eq 0 ]] && echo "${nofile_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_no_file: valid JSON for non-existent file"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_file: no valid JSON for non-existent file (exit=${nofile_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: unsupported file type -> valid JSON stdout
+  local unsup_file="${temp_dir}/test_unsupported.rb"
+  echo 'puts "hello"' >"${unsup_file}"
+  set +e
+  local unsup_stdout
+  unsup_stdout=$(echo '{"tool_input": {"file_path": "'"${unsup_file}"'"}}' \
+    | CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local unsup_exit=$?
+  set -e
+  if [[ "${unsup_exit}" -eq 0 ]] && echo "${unsup_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_unsupported: valid JSON for unsupported file type"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_unsupported: no valid JSON for unsupported type (exit=${unsup_exit})"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: language disabled -> valid JSON stdout
+  local disabled_project="${temp_dir}/disabled_project"
+  mkdir -p "${disabled_project}/.claude/hooks"
+  cat >"${disabled_project}/.claude/hooks/config.json" <<'DIS_EOF'
+{"languages": {"python": false}}
+DIS_EOF
+  local disabled_file="${temp_dir}/disabled_test.py"
+  echo '"""Module."""' >"${disabled_file}"
+  set +e
+  local dis_stdout
+  dis_stdout=$(echo '{"tool_input": {"file_path": "'"${disabled_file}"'"}}' \
+    | CLAUDE_PROJECT_DIR="${disabled_project}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local dis_exit=$?
+  set -e
+  if [[ "${dis_exit}" -eq 0 ]] && echo "${dis_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_lang_disabled: valid JSON when language disabled"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_lang_disabled: no valid JSON when language disabled (exit=${dis_exit})"
+    echo "   stdout: ${dis_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # JSON Protocol: clean file (zero violations) -> valid JSON stdout
+  local clean_file="${temp_dir}/clean_protocol_test.py"
+  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    pass\n' >"${clean_file}"
+  set +e
+  local clean_stdout
+  clean_stdout=$(echo '{"tool_input": {"file_path": "'"${clean_file}"'"}}' | HOOK_SKIP_SUBPROCESS=1 \
+    CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+    "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local clean_exit=$?
+  set -e
+  if [[ "${clean_exit}" -eq 0 ]] && echo "${clean_stdout}" | grep -q '"continue"'; then
+    echo "PASS json_protocol_clean_file: valid JSON for zero-violation file"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_clean_file: no valid JSON for clean file (exit=${clean_exit})"
+    echo "   stdout: ${clean_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: no bare "exit 0" without hook_json/exit_json/printf
+  local bare_exits
+  bare_exits=$(awk '
+    /^[[:space:]]*exit_json\(\)[[:space:]]*\{/ {
+      in_exit_json = 1
+      next
+    }
+    in_exit_json && /^[[:space:]]*}[[:space:]]*$/ {
+      in_exit_json = 0
+      next
+    }
+    {
+      if ($0 ~ /^[[:space:]]*exit 0[[:space:]]*$/) {
+        if (in_exit_json) {
+          next
+        }
+        if (prev ~ /printf .*continue/) {
+          next
+        }
+        print NR ":" $0
+      }
+      if ($0 !~ /^[[:space:]]*$/) {
+        prev = $0
+      }
+    }
+  ' "${script_dir}/multi_linter.sh")
+  if [[ -z "${bare_exits}" ]]; then
+    echo "PASS json_protocol_no_bare_exit: all exit 0 paths use exit_json/hook_json"
+    passed=$((passed + 1))
+  else
+    echo "FAIL json_protocol_no_bare_exit: bare exit 0 found:"
+    echo "   ${bare_exits}"
+    failed=$((failed + 1))
+  fi
+
+  echo ""
+  echo "--- set-e Hardening Tests ---"
+
+  # Structural: subprocess captures exit code with || (BUG 3 fix)
+  if grep -q '|| subprocess_exit=\$?' "${script_dir}/multi_linter.sh"; then
+    echo "PASS subprocess_exit_capture: subprocess uses || to capture exit code"
+    passed=$((passed + 1))
+  else
+    echo "FAIL subprocess_exit_capture: subprocess missing || exit capture (BUG 3)"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: subprocess_exit initialized before invocation
+  if grep -q 'subprocess_exit=0' "${script_dir}/multi_linter.sh"; then
+    echo "PASS subprocess_exit_init: subprocess_exit initialized to 0"
+    passed=$((passed + 1))
+  else
+    echo "FAIL subprocess_exit_init: subprocess_exit not initialized"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: no bare subprocess_exit=$? (would be dead code under set -e)
+  if grep -qE '^\s+subprocess_exit=\$\?\s*$' "${script_dir}/multi_linter.sh"; then
+    echo "FAIL no_bare_subprocess_exit: bare subprocess_exit=\$? still present"
+    failed=$((failed + 1))
+  else
+    echo "PASS no_bare_subprocess_exit: no bare subprocess_exit=\$? (BUG 3 fixed)"
+    passed=$((passed + 1))
+  fi
+
+  # Structural: hook_json() jaq call has || printf fallback (Category D)
+  if grep -q 'systemMessage.*2>/dev/null || printf' "${script_dir}/multi_linter.sh"; then
+    echo "PASS hook_json_jaq_fallback: hook_json() has printf fallback for jaq failure"
+    passed=$((passed + 1))
+  else
+    echo "FAIL hook_json_jaq_fallback: hook_json() missing jaq fallback"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: jaq -s '.' pipelines have || fallbacks (Category A hardening)
+  local jaq_s_fallbacks
+  jaq_s_fallbacks=$(grep -c "jaq -s '\.')" "${script_dir}/multi_linter.sh" || true)
+  local jaq_s_with_fallback
+  jaq_s_with_fallback=$(grep -c "jaq -s '\.') ||" "${script_dir}/multi_linter.sh" || true)
+  if [[ "${jaq_s_with_fallback}" -ge 5 ]]; then
+    echo "PASS jaq_pipeline_fallbacks: ${jaq_s_with_fallback}/${jaq_s_fallbacks} jaq -s '.' pipelines have || fallback"
+    passed=$((passed + 1))
+  else
+    echo "FAIL jaq_pipeline_fallbacks: ${jaq_s_with_fallback}/${jaq_s_fallbacks} (expected at least 5 with fallback)"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: standalone jaq -n violation assignments have || fallbacks (Category B)
+  local jaq_n_fallbacks=0
+  grep -q '|| json_violation=' "${script_dir}/multi_linter.sh" && jaq_n_fallbacks=$((jaq_n_fallbacks + 1))
+  grep -q '|| toml_violation=' "${script_dir}/multi_linter.sh" && jaq_n_fallbacks=$((jaq_n_fallbacks + 1))
+  if [[ "${jaq_n_fallbacks}" -ge 2 ]]; then
+    echo "PASS jaq_standalone_fallbacks: ${jaq_n_fallbacks} standalone jaq -n fallbacks found"
+    passed=$((passed + 1))
+  else
+    echo "FAIL jaq_standalone_fallbacks: ${jaq_n_fallbacks} fallback(s) (expected at least 2)"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: semgrep_files pipeline has || fallback (Category C)
+  if grep -q '|| semgrep_files=' "${script_dir}/multi_linter.sh"; then
+    echo "PASS semgrep_files_fallback: semgrep_files pipeline has || fallback"
+    passed=$((passed + 1))
+  else
+    echo "FAIL semgrep_files_fallback: semgrep_files missing || fallback"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: hadolint_version pipeline has || fallback (Category C)
+  if grep -q '|| hadolint_version=' "${script_dir}/multi_linter.sh"; then
+    echo "PASS hadolint_version_fallback: hadolint_version has || fallback"
+    passed=$((passed + 1))
+  else
+    echo "FAIL hadolint_version_fallback: hadolint_version missing || fallback"
+    failed=$((failed + 1))
+  fi
+
+  # Functional: subprocess failure still produces valid JSON (BUG 3 regression test)
+  local mock_claude_dir="${temp_dir}/mock_claude_bin"
+  mkdir -p "${mock_claude_dir}"
+  # Create mock 'claude' that always exits 1 (simulates subprocess crash)
+  printf '#!/bin/bash\nexit 1\n' >"${mock_claude_dir}/claude"
+  chmod +x "${mock_claude_dir}/claude"
+  # Create mock 'timeout' that passes through to the command
+  printf '#!/bin/bash\nshift; exec "$@"\n' >"${mock_claude_dir}/timeout"
+  chmod +x "${mock_claude_dir}/timeout"
+
+  # Python file with violation (F841 unused variable) to trigger subprocess delegation
+  local bug3_file="${temp_dir}/bug3_test.py"
+  printf '"""Module docstring."""\n\n\ndef foo():\n    """Do nothing."""\n    unused_var = 1\n    return 42\n' >"${bug3_file}"
+
+  local bug3_json='{"tool_input": {"file_path": "'"${bug3_file}"'"}}'
+  set +e
+  local bug3_stdout
+  bug3_stdout=$(echo "${bug3_json}" \
+    | PATH="${mock_claude_dir}:${PATH}" \
+      CLAUDE_PROJECT_DIR="${fixture_project_dir}" \
+      "${script_dir}/multi_linter.sh" 2>/dev/null)
+  local bug3_exit=$?
+  set -e
+
+  # Hook MUST produce JSON on stdout even when subprocess crashes
+  if echo "${bug3_stdout}" | grep -q '"continue"'; then
+    echo "PASS bug3_subprocess_failure_json: valid JSON when subprocess exits non-zero (exit=${bug3_exit})"
+    passed=$((passed + 1))
+  else
+    echo "FAIL bug3_subprocess_failure_json: no valid JSON after subprocess failure (exit=${bug3_exit})"
+    echo "   stdout: ${bug3_stdout}"
+    failed=$((failed + 1))
+  fi
+
+  echo ""
+  echo "--- Portability Tests ---"
+
+  # Structural: venv PATH prepend exists in multi_linter.sh (ISSUE 1 fix)
+  if grep -q 'CLAUDE_PROJECT_DIR.*\.venv/bin' "${script_dir}/multi_linter.sh"; then
+    echo "PASS venv_path_prepend: hook prepends .venv/bin to PATH"
+    passed=$((passed + 1))
+  else
+    echo "FAIL venv_path_prepend: missing venv PATH prepend (ISSUE 1)"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: markdownlint-cli2 version pinned in setup.sh (ISSUE 2 fix)
+  if grep -q 'markdownlint-cli2@' "${script_dir}/../../scripts/setup.sh"; then
+    echo "PASS markdownlint_version_pin: bunx wrapper has version pin"
+    passed=$((passed + 1))
+  else
+    echo "FAIL markdownlint_version_pin: missing version pin in setup.sh (ISSUE 2)"
+    failed=$((failed + 1))
+  fi
+
+  # Structural: .gitignore includes .venv/, .ruff_cache/, .pytest_cache/
+  local gitignore_file="${script_dir}/../../.gitignore"
+  local gi_count=0
+  grep -q '^\.venv/' "${gitignore_file}" 2>/dev/null && gi_count=$((gi_count + 1))
+  grep -q '^\.ruff_cache/' "${gitignore_file}" 2>/dev/null && gi_count=$((gi_count + 1))
+  grep -q '^\.pytest_cache/' "${gitignore_file}" 2>/dev/null && gi_count=$((gi_count + 1))
+  if [[ "${gi_count}" -ge 3 ]]; then
+    echo "PASS gitignore_cache_dirs: .venv/, .ruff_cache/, .pytest_cache/ gitignored"
+    passed=$((passed + 1))
+  else
+    echo "FAIL gitignore_cache_dirs: missing cache dirs in .gitignore (${gi_count}/3)"
+    failed=$((failed + 1))
+  fi
+
+  echo ""
   echo "--- ShellCheck Compliance Tests ---"
 
   # Test: all hook scripts pass shellcheck
   if command -v shellcheck >/dev/null 2>&1; then
     local sc_ok=true
     for sc_file in "${script_dir}/multi_linter.sh" \
-                   "${script_dir}/protect_linter_configs.sh" \
-                   "${script_dir}/enforce_package_managers.sh" \
-                   "${script_dir}/stop_config_guardian.sh" \
-                   "${script_dir}/approve_configs.sh" \
-                   "${script_dir}/test_hook.sh" \
-                   "${script_dir}/../tests/hooks/test_subprocess_permissions.sh"; do
+      "${script_dir}/protect_linter_configs.sh" \
+      "${script_dir}/enforce_package_managers.sh" \
+      "${script_dir}/stop_config_guardian.sh" \
+      "${script_dir}/approve_configs.sh" \
+      "${script_dir}/test_hook.sh" \
+      "${script_dir}/../tests/hooks/test_subprocess_permissions.sh"; do
       if [[ -f "${sc_file}" ]]; then
         # shellcheck disable=SC2310  # intentional: checking in if
         if ! shellcheck "${sc_file}" >/dev/null 2>&1; then

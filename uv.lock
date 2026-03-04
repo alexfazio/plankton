@@ -1400,10 +1400,16 @@ name = "my-project"
 version = "0.1.0"
 source = { editable = "." }
 
-[package.optional-dependencies]
+[package.dev-dependencies]
+benchmark = [
+    { name = "datasets" },
+    { name = "evalplus" },
+    { name = "scipy" },
+]
 dev = [
     { name = "bandit" },
     { name = "check-jsonschema" },
+    { name = "datasets" },
     { name = "evalplus" },
     { name = "flake8" },
     { name = "flake8-async" },
@@ -1419,23 +1425,30 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "bandit", marker = "extra == 'dev'" },
-    { name = "check-jsonschema", marker = "extra == 'dev'" },
-    { name = "evalplus", marker = "extra == 'dev'", specifier = ">=0.3.1" },
-    { name = "flake8", marker = "extra == 'dev'" },
-    { name = "flake8-async", marker = "extra == 'dev'" },
-    { name = "flake8-pydantic", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scipy", marker = "extra == 'dev'", specifier = ">=1.17.0" },
-    { name = "ty", marker = "extra == 'dev'" },
-    { name = "vulture", marker = "extra == 'dev'" },
-    { name = "yamllint", marker = "extra == 'dev'" },
+
+[package.metadata.requires-dev]
+benchmark = [
+    { name = "datasets", specifier = ">=2.0" },
+    { name = "evalplus", specifier = ">=0.3.1" },
+    { name = "scipy", specifier = ">=1.17.0" },
 ]
-provides-extras = ["dev"]
+dev = [
+    { name = "bandit" },
+    { name = "check-jsonschema" },
+    { name = "datasets", specifier = ">=2.0" },
+    { name = "evalplus", specifier = ">=0.3.1" },
+    { name = "flake8" },
+    { name = "flake8-async" },
+    { name = "flake8-pydantic" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "scipy", specifier = ">=1.17.0" },
+    { name = "ty" },
+    { name = "vulture" },
+    { name = "yamllint" },
+]
 
 [[package]]
 name = "nodeenv"

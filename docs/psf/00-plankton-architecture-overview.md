@@ -137,7 +137,7 @@ graph TB
     end
 
     subgraph "CI Layer"
-        PRECOMMIT[.pre-commit-config.yaml<br/>15 Hook Phases]
+        PRECOMMIT[.pre-commit-config.yaml<br/>15 Hook IDs]
         GHA[GitHub Actions<br/>lint + test jobs]
     end
 
@@ -165,7 +165,7 @@ graph TB
 
 ### multi_linter.sh (PostToolUse Hook)
 
-- **Location**: `.claude/hooks/multi_linter.sh` (~1,319 lines)
+- **Location**: `.claude/hooks/multi_linter.sh` (~1,606 lines)
 - **Responsibilities**:
   - Dispatches files to language-specific handlers based on extension
   - Runs three-phase lint: format, collect
@@ -209,9 +209,9 @@ graph TB
 
 ### config.json (Runtime Configuration)
 
-- **Location**: `.claude/hooks/config.json` (~81 lines)
+- **Location**: `.claude/hooks/config.json` (~91 lines)
 - **Responsibilities**: Central config for all hooks -
-  language toggles, protected files, exclusions,
+  language toggles, protected files, security-linter exclusions,
   phase control, model patterns, jscpd settings,
   package manager enforcement
 - **Implementation**: Loaded by `load_config()`;
@@ -230,7 +230,7 @@ graph TB
 
 ### enforce_package_managers.sh (PreToolUse Hook)
 
-- **Location**: `.claude/hooks/enforce_package_managers.sh` (~485 lines)
+- **Location**: `.claude/hooks/enforce_package_managers.sh` (~512 lines)
 - **Responsibilities**: Intercepts legacy package manager
   commands in Bash tool and blocks or warns, suggesting
   project-preferred alternatives (uv for Python, bun for JS)
@@ -245,12 +245,12 @@ graph TB
 
 ### test_hook.sh (Debug/Test Utility)
 
-- **Location**: `.claude/hooks/test_hook.sh` (~1,436 lines)
+- **Location**: `.claude/hooks/test_hook.sh` (~2,012 lines)
 - **Responsibilities**: Self-test suite covering all
   file types, model selection, TS handling, config
   protection, and edge cases
 - **Implementation**: `--self-test` runs tests with
-  `HOOK_SKIP_SUBPROCESS=1` for determinism. 112 cases
+  `HOOK_SKIP_SUBPROCESS=1` for determinism. 113 cases
   including Dockerfile, model selection, TS tests
 
 ## Data Model
@@ -332,8 +332,11 @@ for the full testing PSF covering all 5 test layers, fixtures,
 CI pipeline, and 303+ automated checks.
 
 - **Quick reference**: `bash .claude/hooks/test_hook.sh --self-test`
-  (112 cases), `bash .claude/tests/hooks/verify_feedback_loop.sh`
-  (28 checks), `bash tests/stress/run_stress_tests.sh` (133 tests)
+  (113 cases), `bash .claude/tests/hooks/verify_feedback_loop.sh`
+  (28 checks), `bash tests/stress/run_stress_tests.sh` (133 tests),
+  `.venv/bin/pytest tests/` (297 tests: 267 unit + 30 integration);
+  hook investigation tests: `test_nursery_config.sh` (3 tests),
+  `test_env_propagation.sh` (3 tests), `test_subprocess_permissions.sh` (5 tests)
 - **Type safety**: Python 3.11+; ty in Phase 2b;
   ruff with 50+ rule categories in preview mode
 - **Shell quality**: ShellCheck max enforcement
@@ -369,7 +372,7 @@ CI pipeline, and 303+ automated checks.
 
 ## Risks, Tech Debt, Open Questions
 
-- **Shell script size**: `multi_linter.sh` ~1,319
+- **Shell script size**: `multi_linter.sh` ~1,486
   lines; per-language modules would help
 - **Fragile parsing**: yamllint/flake8/markdownlint
   output parsed via `sed`; format changes break it
@@ -385,32 +388,9 @@ CI pipeline, and 303+ automated checks.
 
 ## Benchmark Subsystem
 
-- **Location**: `benchmark/`
-- **Purpose**: A/B testing of Plankton hooks against EvalPlus
-  HumanEval+ and ClassEval benchmarks to measure hook impact
-  on code generation quality
-- **Components**:
-  - `runner.py` (~582 lines): Orchestrates A/B benchmark runs
-    — condition A (baseline, no hooks via `cc -bare`) vs
-    condition B (hooks active). Produces JSONL files consumable
-    by `evalplus.evaluate`. Supports both HumanEval+ (164 tasks)
-    and ClassEval (20 tasks)
-  - `analyze.py` (~135 lines): Post-benchmark statistical
-    analysis using `scipy.stats.binomtest` for significance
-    testing at α=0.05
-  - `classeval_wrapper.py` (~90 lines): ClassEval benchmark
-    adapter
-  - `evalplus_wrapper.py` (~28 lines): EvalPlus benchmark
-    adapter
-  - `prompt_template.txt` / `classeval_prompt_template.txt`:
-    Prompt templates for each benchmark
-  - `ClassEval_data.json`: ClassEval task definitions
-  - `prereqs.sh`: Prerequisite installation script
-- **Dependencies**: `scipy`, `evalplus`, Claude CLI
-- **Test coverage**: `tests/unit/test_runner.py` (416 lines),
-  `tests/unit/test_analyze.py` (170 lines),
-  `tests/unit/test_benchmark_integration.py` (81 lines)
-- **Spec**: `docs/specs/adr-plankton-benchmark.md`
+See [02-benchmark-swebench.md](02-benchmark-swebench.md)
+for the full benchmark PSF covering all 8 modules, the CLI,
+297 automated tests, and the A/B experiment protocol.
 
 ## Supporting Files
 
@@ -438,6 +418,15 @@ CI pipeline, and 303+ automated checks.
   Root cause investigation of PostToolUse silent drop hypothesis
 - **`docs/specs/posttooluse-issue/cc-trace/`**: mitmproxy
   trace scripts and JSONL evidence used in investigation
+- **`docs/specs/hook-investigation/hook-glm-dsp-investigation.md`**:
+  Comprehensive hook investigation covering CLAUDECODE guard fix
+  (`env -u CLAUDECODE` at line 555), biome.json correction
+  (removed invalid `"all": true`), and nursery validation guard
+  (object/array short-circuit at line 872)
+- **`docs/specs/hook-investigation/e2e-phase2-commands.md`**:
+  End-to-end verification commands for Phase 2 hook testing
+- **`docs/specs/hook-investigation/e2e-verification-runbook.md`**:
+  Step-by-step E2E runbook for hook pipeline verification
 - **`docs/specs/stress-test-report.md`**: Results from hook
   stress testing
 - **`docs/specs/portable-hooks-template.md`**: Template

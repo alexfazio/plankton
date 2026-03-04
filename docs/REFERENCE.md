@@ -856,7 +856,7 @@ If the file is missing, all features are enabled with sensible defaults.
 | `…typescript.semgrep` | bool | true | Semgrep session scan for TS/JS |
 | `…typescript.knip` | bool | false | Enable Knip dead code detection |
 | `protected_files` | str[] | 14 configs | Linter configs protected from edits |
-| `exclusions` | str[] | tests/,… | Directories excluded from security linters |
+| `security_linter_exclusions` | str[] | .venv/,… | Directories excluded from Python security linters |
 | `phases.auto_format` | bool | true | Phase 1 auto-format |
 | `phases.subprocess_delegation` | bool | true | Phase 3 subprocess delegation |
 | `hook_enabled` | bool | true | Master kill switch (disables all linting) |
@@ -1188,14 +1188,14 @@ cannot handle. This section consolidates all subprocess configuration.
 
 ### Invocation
 
-The subprocess CLI call (`multi_linter.sh:549-556`):
+The subprocess CLI call (`multi_linter.sh:549-557`):
 
 ```bash
 local disallowed_flag=()
 if [[ -n "${disallowed_tools}" ]]; then
   disallowed_flag=(--disallowedTools "${disallowed_tools}")
 fi
-${timeout_cmd} "${claude_cmd}" -p "${prompt}" \
+${timeout_cmd} env -u CLAUDECODE "${claude_cmd}" -p "${prompt}" \
   --dangerously-skip-permissions \
   --settings "${settings_file}" \
   "${disallowed_flag[@]}" \
@@ -1206,6 +1206,8 @@ ${timeout_cmd} "${claude_cmd}" -p "${prompt}" \
 
 Key flags:
 
+- `env -u CLAUDECODE` — unsets `CLAUDECODE` before exec to prevent
+  "nested session" error when the hook fires inside a Claude Code session
 - `--dangerously-skip-permissions` — enables headless operation
   (always paired with `--disallowedTools` unless all tools allowed)
 - `--disallowedTools` — blacklist derived per tier (see Tool Scope)
@@ -1339,7 +1341,7 @@ use a different settings file (e.g., for Z.AI provider routing):
 ```json
 {
   "subprocess": {
-    "settings_file": "~/.claude/glm-no-hooks-settings.json"
+    "settings_file": "~/.claude/custom-subprocess-settings.json"
   }
 }
 ```

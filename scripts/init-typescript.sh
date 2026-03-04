@@ -18,7 +18,7 @@ echo ""
 if [[ -f "${project_dir}/biome.json" ]]; then
   echo "[skip] biome.json already exists"
 else
-  cat > "${project_dir}/biome.json" << 'BIOME_EOF'
+  cat >"${project_dir}/biome.json" <<'BIOME_EOF'
 {
   "$schema": "https://biomejs.dev/schemas/2.3.11/schema.json",
   "vcs": {
@@ -75,7 +75,7 @@ fi
 if [[ -f "${project_dir}/tsconfig.json" ]]; then
   echo "[skip] tsconfig.json already exists"
 else
-  cat > "${project_dir}/tsconfig.json" << 'TSCONFIG_EOF'
+  cat >"${project_dir}/tsconfig.json" <<'TSCONFIG_EOF'
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -101,7 +101,7 @@ if [[ -f "${project_dir}/package.json" ]]; then
     has_biome=$(echo "${existing}" | jaq -r '.devDependencies."@biomejs/biome" // empty' 2>/dev/null)
     if [[ -z "${has_biome}" ]]; then
       echo "${existing}" | jaq '.devDependencies = (.devDependencies // {}) + {"@biomejs/biome": "^2.3.0"}' \
-        > "${project_dir}/package.json.tmp" && mv "${project_dir}/package.json.tmp" "${project_dir}/package.json"
+        >"${project_dir}/package.json.tmp" && mv "${project_dir}/package.json.tmp" "${project_dir}/package.json"
       echo "[updated] package.json (added @biomejs/biome)"
     else
       echo "[skip] package.json already has @biomejs/biome"
@@ -111,7 +111,7 @@ if [[ -f "${project_dir}/package.json" ]]; then
     echo '  "devDependencies": { "@biomejs/biome": "^2.3.0" }'
   fi
 else
-  cat > "${project_dir}/package.json" << 'PKG_EOF'
+  cat >"${project_dir}/package.json" <<'PKG_EOF'
 {
   "private": true,
   "devDependencies": {
@@ -126,7 +126,7 @@ fi
 if [[ -f "${project_dir}/.semgrep.yml" ]]; then
   echo "[skip] .semgrep.yml already exists"
 else
-  cat > "${project_dir}/.semgrep.yml" << 'SEMGREP_EOF'
+  cat >"${project_dir}/.semgrep.yml" <<'SEMGREP_EOF'
 rules:
   # 1. Code Injection: eval() / new Function()
   - id: cc-hooks-no-eval
@@ -242,7 +242,7 @@ fi
 
 # --- 5. Update config.json to enable TypeScript ---
 if command -v jaq >/dev/null 2>&1 && [[ -f "${config_file}" ]]; then
-  jaq '.languages.typescript.enabled = true' "${config_file}" > "${config_file}.tmp" \
+  jaq '.languages.typescript.enabled = true' "${config_file}" >"${config_file}.tmp" \
     && mv "${config_file}.tmp" "${config_file}"
   echo "[updated] config.json (typescript.enabled = true)"
 else

@@ -5,7 +5,15 @@ description = "Project description"
 requires-python = ">=3.11"
 dependencies = []
 
-[project.optional-dependencies]
+[dependency-groups]
+benchmark = [
+  # SWE-bench task loading
+  "datasets>=2.0",
+  # Statistical analysis (McNemar's test)
+  "scipy>=1.17.0",
+  # EvalPlus (Phase 1 archive, kept for reference)
+  "evalplus>=0.3.1",
+]
 dev = [
   # Linting & formatting
   "ruff",
@@ -24,8 +32,8 @@ dev = [
   "yamllint",
   # JSON schema validation
   "check-jsonschema",
-  "evalplus>=0.3.1",
-  "scipy>=1.17.0",
+  # Include benchmark deps so dev env has everything
+  {include-group = "benchmark"},
 ]
 
 [tool.pytest.ini_options]

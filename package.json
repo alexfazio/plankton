@@ -1,28 +1,28 @@
 {
   "name": "plankton",
   "version": "1.0.0",
-  "description": "A ready-to-use template for Claude Code hook-based code quality enforcement. Provides automated linting, formatting, and code quality checks that run during Claude Code sessions.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs",
-    "test": "tests"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "author": "",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/alexfazio/plankton.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/alexfazio/plankton/issues"
-  },
-  "homepage": "https://github.com/alexfazio/plankton#readme",
+  "main": "index.js",
   "devDependencies": {
     "@biomejs/biome": "^2.3.15",
     "oxlint": "^1.49.0"
+  },
+  "bugs": {
+    "url": "https://github.com/alexfazio/plankton/issues"
+  },
+  "description": "A ready-to-use template for Claude Code hook-based code quality enforcement. Provides automated linting, formatting, and code quality checks that run during Claude Code sessions.",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "homepage": "https://github.com/alexfazio/plankton#readme",
+  "keywords": [],
+  "license": "ISC",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
   }
 }

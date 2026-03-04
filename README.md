@@ -17,13 +17,20 @@ Write-time code quality enforcement for AI coding agents, built on Claude Code h
 ```bash
 git clone https://github.com/alexfazio/plankton.git
 cd plankton
-pip install uv && uv sync --all-extras
-claude                # hooks activate automatically
+bash scripts/setup.sh   # installs all tools (macOS + Linux)
+claude                   # hooks activate automatically
 ```
 
 That's it. Plankton works by being the directory you run Claude Code from.
 The hooks in `.claude/hooks/` are picked up automatically — no install
-command, no plugin, no config. Clone, cd, claude.
+command, no plugin, no config. Clone, setup, claude.
+
+> [!NOTE]
+> **Windows** is not supported. Use
+> [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and
+> follow the Linux instructions inside the WSL environment.
+
+<!-- -->
 
 > [!TIP]
 > You can work on any codebase from inside plankton. Just tell Claude:
@@ -33,12 +40,13 @@ command, no plugin, no config. Clone, cd, claude.
 <!-- -->
 
 > [!NOTE]
-> **Existing codebases:** the agent edits a file, Plankton enforces every
-> violation in it, pre-existing included. Messy files get cleaned up on first
-> touch. After that, they're fast. Scope it down with exclusions:
+> **Existing codebases:** when the agent edits a file, Plankton runs the
+> configured checks for that file, including pre-existing issues. Some issues
+> are auto-fixed on first touch; unresolved ones come back as feedback. Scope
+> down only the Python security scanners here if needed:
 >
 > ```json
-> "exclusions": ["tests/", "legacy/", "vendor/", "node_modules/"]
+> "security_linter_exclusions": [".venv/", "vendor/", "node_modules/"]
 > ```
 
 **Recommended: disable Claude Code auto-updates.** Plankton depends on
@@ -53,9 +61,46 @@ echo 'export DISABLE_AUTOUPDATER=1' >> ~/.zshrc && source ~/.zshrc
 curl -fsSL https://claude.ai/install.sh | bash -s stable
 ```
 
-`jaq`, `ruff`, and `uv` are required for all languages. TypeScript also
-needs `biome`. Everything else is optional and gracefully skipped if not
-installed. See [docs/SETUP.md](docs/SETUP.md) for per-language setup.
+`scripts/setup.sh` installs all tools automatically. On macOS it uses
+Homebrew; on Linux it downloads prebuilt binaries (no cargo or go
+required). See [docs/SETUP.md](docs/SETUP.md) for manual per-language
+setup.
+
+<!-- markdownlint-disable MD033 -->
+<details>
+<summary>Manual install (if you prefer not to use the setup script)</summary>
+
+**macOS:**
+
+```bash
+brew install jaq ruff uv shellcheck shfmt hadolint taplo
+brew install oven-sh/bun/bun
+bun install                              # biome, oxlint
+uv sync --all-extras --no-install-project  # Python linting tools
+```
+
+**Linux:**
+
+```bash
+# Core tools (ruff + uv via Astral installers)
+curl -LsSf https://astral.sh/ruff/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Binary tools — see docs/SETUP.md for download URLs
+# jaq, shellcheck, shfmt, hadolint, taplo
+
+# JS runtime + tools
+curl -fsSL https://bun.sh/install | bash
+bun install                              # biome, oxlint
+
+# Python linting tools
+uv sync --all-extras --no-install-project
+```
+
+See [docs/SETUP.md](docs/SETUP.md) for per-language details and download
+URLs.
+</details>
+<!-- markdownlint-enable MD033 -->
 
 ## what is plankton
 
@@ -87,8 +132,31 @@ For the full motivation and design story, read the
 ## verify
 
 ```bash
-# Install pre-commit hooks (optional but recommended)
-uv run pre-commit install
+# Install pre-commit hooks (recommended). This makes the strict
+# runtime-parity gate run automatically on git commit and enables the
+# commit-message policy hook.
+uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+
+# Install the pre-push hook. Use -f to replace any existing local
+# pre-push hook instead of chaining legacy all-files runners.
+uv run pre-commit install --hook-type pre-push -f
+
+# Repo-wide baseline sweep (skip the staged-file strict runtime hook;
+# it is designed for real commits and targeted reruns, not --all-files)
+SKIP=plankton-strict-runtime-commit uv run pre-commit run --all-files
+
+# Run the non-benchmark Plankton hook test suite directly
+./scripts/pre_push_plankton_hooks.sh
+
+# Manually re-run the same strict gate on currently staged files
+make strict
+
+# For intentional protected config edits, use the protected override for
+# the manual check:
+make strict-protected FILES=".semgrep.yml"
+
+# ...or for an actual commit:
+PLANKTON_STRICT_ALLOW_PROTECTED=1 git commit
 
 # Run the hook self-test suite
 .claude/hooks/test_hook.sh --self-test
@@ -134,7 +202,7 @@ shape how code is organized rather than how it looks.
 ## configuration
 
 `.claude/hooks/config.json` controls everything: language toggles, phase
-control, model routing patterns, protected files, exclusions, jscpd
+control, model routing patterns, protected files, security-linter exclusions, jscpd
 thresholds, package manager enforcement modes. If the file is missing, all
 features are enabled with sensible defaults. Environment variables
 (`HOOK_SKIP_SUBPROCESS=1`, `HOOK_SUBPROCESS_TIMEOUT`) override config values

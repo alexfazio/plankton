@@ -32,6 +32,7 @@ fi
 # Load protected files from config (must match protect_linter_configs.sh)
 load_protected_files_from_config() {
   local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  PROTECTED_FILES=()
   if [[ -f "${config_file}" ]] && command -v jaq >/dev/null 2>&1; then
     PROTECTED_FILES=()
     local pf_list
@@ -49,6 +50,9 @@ load_protected_files_from_config() {
       "biome.json" ".oxlintrc.json" ".semgrep.yml" "knip.json"
     )
   fi
+  # Always audit repo-local subprocess settings (BUG-9 fix)
+  # This file controls recursion safety and is auditable via git diff
+  PROTECTED_FILES+=(".claude/subprocess-settings.json")
 }
 
 load_protected_files_from_config

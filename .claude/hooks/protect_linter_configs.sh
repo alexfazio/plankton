@@ -15,9 +15,9 @@ set -euo pipefail
 # Read JSON input from stdin
 input=$(cat)
 
-# Extract file path from tool_input
+# Extract file path from tool_input (with notebook_path fallback)
 # If jaq fails (missing/crash), fail-open with valid JSON schema
-file_path=$(jaq -r '.tool_input?.file_path? // empty' \
+file_path=$(jaq -r '.tool_input?.file_path? // .tool_input?.notebook_path? // empty' \
   <<<"${input}" 2>/dev/null) || {
   echo '{"decision": "approve"}'
   exit 0
@@ -29,16 +29,90 @@ if [[ -z "${file_path}" ]]; then
   exit 0
 fi
 
+# The canonical hook test suite now lives under .claude/hooks/test/.
+# Those files are intentionally editable and must not be treated as immutable
+# hook infrastructure or protected linter configs.
+is_hook_test_path() {
+  local p="$1"
+  if [[ "${p}" == ".claude/hooks/test/"* ]] || [[ "${p}" == *"/.claude/hooks/test/"* ]]; then return 0; fi
+  return 1
+}
+
+if is_hook_test_path "${file_path}"; then
+  echo '{"decision": "approve"}'
+  exit 0
+fi
+
 # Get basename for matching
 basename=$(basename "${file_path}")
 
 # Path-based protection for .claude/ directory
-# Protects entire hooks directory and settings files
-if [[ "${file_path}" == *"/.claude/hooks/"* ]] \
-  || [[ "${file_path}" == *"/.claude/settings.json" ]] \
-  || [[ "${file_path}" == *"/.claude/settings.local.json" ]]; then
+# Protects hooks directory, settings files, and subprocess settings
+# Matches both relative (.claude/...) and absolute (*/.claude/...) paths
+is_protected_claude_path() {
+  local p="$1"
+  # .claude/hooks/* (relative or absolute)
+  if [[ "${p}" == ".claude/hooks/"* ]] || [[ "${p}" == *"/.claude/hooks/"* ]]; then return 0; fi
+  # .claude/settings.json
+  if [[ "${p}" == ".claude/settings.json" ]] || [[ "${p}" == *"/.claude/settings.json" ]]; then return 0; fi
+  # .claude/settings.local.json
+  if [[ "${p}" == ".claude/settings.local.json" ]] || [[ "${p}" == *"/.claude/settings.local.json" ]]; then return 0; fi
+  # .claude/subprocess-settings.json
+  if [[ "${p}" == ".claude/subprocess-settings.json" ]] || [[ "${p}" == *"/.claude/subprocess-settings.json" ]]; then return 0; fi
+  return 1
+}
+
+if is_protected_claude_path "${file_path}"; then
   cat <<EOF
 {"decision": "block", "reason": "Protected Claude Code config (${basename}). Hook scripts and settings are immutable."}
+EOF
+  exit 0
+fi
+
+# Portable path normalization (replaces GNU-only realpath -m)
+# Tries: realpath (works on macOS/Linux for existing paths),
+#         cd+pwd fallback (resolves symlinks in parent dir),
+#         raw string (last resort)
+_normalize_path() {
+  local p="$1"
+  realpath "${p}" 2>/dev/null && return 0
+  # File doesn't exist — try resolving the parent directory
+  local dir base
+  dir="$(dirname "${p}")"
+  base="$(basename "${p}")"
+  if [[ -d "${dir}" ]]; then
+    # shellcheck disable=SC2312  # intentional: inline cd+pwd for path resolution
+    echo "$(cd "${dir}" && pwd)/${base}"
+  else
+    echo "${p}"
+  fi
+}
+
+# Dynamic protection for config-specified subprocess settings file
+protect_configured_settings() {
+  local candidate="$1"
+  local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  [[ -f "${config_file}" ]] || return 1
+  command -v jaq >/dev/null 2>&1 || return 1
+
+  local configured_path
+  configured_path=$(jaq -r '.subprocess.settings_file // empty' "${config_file}" 2>/dev/null) || return 1
+  [[ -z "${configured_path}" ]] && return 1
+
+  # Expand leading tilde
+  configured_path="${configured_path/#\~/${HOME}}"
+
+  # Normalize both paths for comparison (portable)
+  local norm_candidate norm_configured
+  norm_candidate=$(_normalize_path "${candidate}")
+  norm_configured=$(_normalize_path "${configured_path}")
+
+  [[ "${norm_candidate}" == "${norm_configured}" ]]
+}
+
+if protect_configured_settings "${file_path}"; then
+  cat <<EOF
+{"decision": "block", "reason": "Protected subprocess settings file (${basename}). This file controls subprocess recursion safety."}
 EOF
   exit 0
 fi

@@ -8,14 +8,14 @@
 - **Scope**: `.claude/hooks/test_hook.sh`, `.claude/tests/hooks/`,
   `tests/stress/`, `.github/workflows/ci.yml`, `.pre-commit-config.yaml`
 - **Key responsibilities**:
-  - Self-test suite (112 cases) for fast per-change validation
+  - Self-test suite (113 cases) for fast per-change validation
   - Standalone harnesses for feedback loop, production path,
     and output channel verification
   - Stress test suite (133 cases) with TAP output and
     markdown report generation
   - CI pipeline: pre-commit (lint) + pytest (test) on push/PR
-- **Test totals**: 112 + 28 + 10 + 20 + 133 = 303 automated
-  checks (+ 103 agent-based integration tests)
+- **Test totals**: 113 + 28 + 10 + 20 + 133 + 11 = 315 hook checks
+  (+ 103 agent-based integration tests + 297 pytest tests)
 - **Dependencies**: ShellCheck, ruff, jaq, yamllint, hadolint,
   taplo, markdownlint-cli2; biome optional
 
@@ -23,7 +23,8 @@
 
 - **Goals**: Catch regressions in hook behavior, validate
   violation JSON schema, ensure subprocess delegation works,
-  verify all PostToolUse output channels
+  verify all PostToolUse output channels, verify env var
+  propagation, nursery config validation, subprocess permissions
 - **Non-goals**: Testing the Claude Code runtime itself;
   testing linter rule correctness; end-to-end LLM behavior
   verification (that requires mitmproxy live tests)
@@ -34,8 +35,8 @@
   `docs/specs/stress-test-report.md` captures stress results
 - **Operating model**: Hook tests are bash scripts run locally
   or in CI; pytest unit tests cover the benchmark subsystem
-  (`tests/unit/test_runner.py`, `test_analyze.py`,
-  `test_benchmark_integration.py`)
+  (see [02-benchmark-swebench.md](02-benchmark-swebench.md)
+  for the full 297-test breakdown)
 
 ## System Overview
 
@@ -56,7 +57,7 @@
 ```mermaid
 graph TB
     subgraph "Layer 1: Fast Feedback"
-        ST[test_hook.sh --self-test<br/>112 cases]
+        ST[test_hook.sh --self-test<br/>113 cases]
     end
 
     subgraph "Layer 2: Focused Harnesses"
@@ -71,11 +72,11 @@ graph TB
     end
 
     subgraph "Layer 4: Unit Tests"
-        UT[pytest tests/unit/<br/>3 files, benchmark coverage]
+        UT[pytest tests/unit/<br/>10 files, 267 tests, swebench coverage]
     end
 
     subgraph "Layer 5: CI"
-        PC[pre-commit<br/>20 hook phases]
+        PC[pre-commit<br/>15 hook IDs]
         PT[pytest<br/>tests/ directory]
     end
 
@@ -98,9 +99,9 @@ graph TB
 
 ### test_hook.sh (Self-Test Suite)
 
-- **Location**: `.claude/hooks/test_hook.sh` (~1,436 lines)
+- **Location**: `.claude/hooks/test_hook.sh` (~2,012 lines)
 - **Invocation**: `bash .claude/hooks/test_hook.sh --self-test`
-- **Test count**: 112 pass / 0 fail
+- **Test count**: 113 pass / 0 fail
 - **Implementation**: `run_self_test()` orchestrates all tests
   using three helpers: `test_temp_file()` (exit code checks),
   `test_bash_command()` (PM hook JSON I/O), and
@@ -119,7 +120,7 @@ graph TB
 ### verify_feedback_loop.sh
 
 - **Location**: `.claude/tests/hooks/verify_feedback_loop.sh`
-  (209 lines)
+  (208 lines)
 - **Invocation**: `bash .claude/tests/hooks/verify_feedback_loop.sh`
 - **Test count**: 28 pass / 0 fail / 4 skip (biome)
 - **Purpose**: Validates multi_linter.sh stderr output format
@@ -138,7 +139,7 @@ graph TB
 ### test_production_path.sh
 
 - **Location**: `.claude/tests/hooks/test_production_path.sh`
-  (275 lines)
+  (276 lines)
 - **Invocation**: `bash .claude/tests/hooks/test_production_path.sh`
 - **Test count**: 10 pass / 0 fail
 - **Purpose**: Tests subprocess delegation with mock `claude`
@@ -170,7 +171,7 @@ graph TB
 
 ### run_stress_tests.sh
 
-- **Location**: `tests/stress/run_stress_tests.sh` (2,335 lines)
+- **Location**: `tests/stress/run_stress_tests.sh` (2,347 lines)
 - **Invocation**: `bash tests/stress/run_stress_tests.sh`
 - **Test count**: 133 tests (125 pass, 8 skip)
 - **Output**: TAP format to stdout + markdown report at
@@ -189,24 +190,41 @@ graph TB
 
 - **Location**: `.claude/tests/hooks/fixtures/`
 - **Files**:
-  - `config.json` (79 lines): Maximal config with all languages
+  - `config.json` (97 lines): Maximal config with all languages
     and options enabled; includes `_exclusions_warning` for
     `.claude/` skip trap documentation
-  - `.markdownlint.jsonc`: Markdown linting rules
-  - `.markdownlint-cli2.jsonc`: Markdownlint-cli2 config
 - **Design**: Decouples tests from production `.claude/hooks/config.json`;
   all test helpers set `CLAUDE_PROJECT_DIR` to a temp dir
   containing copies of these fixtures
 
 ### Test Utilities
 
-- **swap_settings.sh** (108 lines): Backup/restore helper
+- **swap_settings.sh** (107 lines): Backup/restore helper
   for `.claude/settings.json` with SHA-256 verification.
   4 subcommands: `backup`, `swap-minimal`, `restore`, `status`
-- **minimal-test-hook.sh** (4 lines): Stub PostToolUse hook
+- **minimal-test-hook.sh** (3 lines): Stub PostToolUse hook
   that always exits 2 with 3 violations. Used to isolate
   whether the agent ignores system-reminder regardless of
   hook complexity
+
+### Hook Investigation Tests
+
+- **test_nursery_config.sh** (175 lines): Tests `_validate_nursery_config()`
+  behavior — object/array-valued nursery suppresses mismatch warning,
+  string-valued mismatch still warns
+- **test_env_propagation.sh** (163 lines): Tests environment variable
+  propagation to Phase 3 subprocess — `ANTHROPIC_BASE_URL` propagates,
+  `CLAUDECODE` is stripped via `env -u CLAUDECODE`
+- **test_subprocess_permissions.sh** (188 lines): Tests subprocess
+  permission and tool flags — `--dangerously-skip-permissions` always
+  passed, `--disallowedTools` used instead of `--allowedTools`,
+  safety invariant enforced
+- **test_tier_config.sh**: Tests tier-based model selection configuration
+- **test_subprocess_logging.sh**: Tests subprocess logging behavior
+- **test_subprocess_settings.sh**: Tests subprocess settings file handling
+- **test_empirical_p0.sh**: Empirical Phase 0 tests
+- **test_empirical_p3_p4.sh**: Empirical Phase 3/4 tests
+- **test_step0_reproduction.sh**: Step 0 reproduction tests
 
 ## Data Model
 
@@ -223,7 +241,7 @@ graph TB
 ## Operations
 
 - **Local fast check**: `bash .claude/hooks/test_hook.sh --self-test`
-  (~30s, 112 tests)
+  (~30s, 113 tests)
 - **Full local suite**: Run all 4 harnesses sequentially (~2 min,
   170 tests + 4 skip)
 - **Stress test**: `bash tests/stress/run_stress_tests.sh` (~5 min,
@@ -239,7 +257,7 @@ graph TB
 
 ## Testing & Quality
 
-- **Pre-commit pipeline**: 20 hook phases mirroring CC hook
+- **Pre-commit pipeline**: 15 hook IDs mirroring CC hook
   linters; runs `uv run pre-commit run --all-files`
 - **Agent integration tests**: 103 tests via TeamCreate (3 agents);
   results archived in `.claude/tests/hooks/results/archive/`
@@ -283,10 +301,11 @@ graph TB
 
 ## Risks, Tech Debt, Open Questions
 
-- **Pytest unit tests**: `tests/unit/` contains 3 test files
-  (test_runner.py, test_analyze.py, test_benchmark_integration.py)
-  covering the benchmark subsystem; hook testing remains shell-based
-- **Stress test size**: `run_stress_tests.sh` at 2,335 lines
+- **Pytest tests**: `tests/unit/` (10 files, 267 tests) +
+  `tests/integration/` (7 files, 30 tests) = 297 total;
+  see [02-benchmark-swebench.md](02-benchmark-swebench.md)
+  for per-file breakdown; hook testing remains shell-based
+- **Stress test size**: `run_stress_tests.sh` at 2,347 lines
   is complex; per-category modules would help
 - **Agent tests require TeamCreate**: 103 integration tests
   need Claude Code team orchestration; not runnable in CI
@@ -310,6 +329,9 @@ graph TB
   JSONL results and aggregated RESULTS.md
 - **`docs/specs/posttooluse-issue/make-plankton-work.md`**:
   Live verification procedure (Step 2) with mitmproxy
+- **`docs/specs/hook-investigation/`**: Hook investigation
+  runbooks and E2E verification commands for CLAUDECODE guard,
+  biome.json correction, and nursery validation fixes
 
 ## Glossary
 
