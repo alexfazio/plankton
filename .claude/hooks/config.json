@@ -37,11 +37,7 @@
     ".semgrep.yml",
     "knip.json"
   ],
-  "security_linter_exclusions": [
-    ".venv/",
-    "node_modules/",
-    ".git/"
-  ],
+  "security_linter_exclusions": [".venv/", "node_modules/", ".git/"],
   "phases": {
     "auto_format": true,
     "subprocess_delegation": true
@@ -51,35 +47,17 @@
   },
   "jscpd": {
     "session_threshold": 3,
-    "scan_dirs": [
-      "src/",
-      "lib/"
-    ],
+    "scan_dirs": ["src/", "lib/"],
     "advisory_only": true
   },
   "package_managers": {
     "python": "uv",
     "javascript": "bun",
     "allowed_subcommands": {
-      "npm": [
-        "audit",
-        "view",
-        "pack",
-        "publish",
-        "whoami",
-        "login"
-      ],
-      "pip": [
-        "download"
-      ],
-      "yarn": [
-        "audit",
-        "info"
-      ],
-      "pnpm": [
-        "audit",
-        "info"
-      ],
+      "npm": ["audit", "view", "pack", "publish", "whoami", "login"],
+      "pip": ["download"],
+      "yarn": ["audit", "info"],
+      "pnpm": ["audit", "info"],
       "poetry": [],
       "pipenv": []
     }

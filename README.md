@@ -109,15 +109,17 @@ agent is blocked from proceeding until its output passes your checks —
 style, types, security, complexity — all enforced before commits and code
 review.
 
-3. **Run the Setup Wizard**:
+1. **Run the Setup Wizard**:
 
    ```bash
    uv run --no-project scripts/setup.py
    ```
 
-   This will auto-detect your project languages, check for installed tools, and generate your configuration.
+   This will auto-detect your project languages, check for
+   installed tools, and generate your configuration.
 
-4. **Start a Claude Code session**. Hooks activate automatically.
+2. **Start a Claude Code session**. Hooks activate automatically.
+
 - **Higher pass rate** — write-time feedback catches bugs, type errors,
   and anti-patterns that would otherwise cause test failures.
 - **Behavioral shift** — with Plankton active, the model learns from

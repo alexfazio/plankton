@@ -5,6 +5,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 
 def _install_dependency_stubs() -> None:
@@ -23,8 +24,8 @@ def _install_dependency_stubs() -> None:
 
                 return decorator
 
-        typer_module.Exit = Exit
-        typer_module.Typer = DummyTyper
+        setattr(typer_module, "Exit", Exit)
+        setattr(typer_module, "Typer", DummyTyper)
         sys.modules["typer"] = typer_module
 
     if "rich" not in sys.modules:
@@ -47,9 +48,9 @@ def _install_dependency_stubs() -> None:
             def ask(*args, **kwargs) -> bool:
                 return kwargs.get("default", True)
 
-        rich_console_module.Console = Console
-        rich_panel_module.Panel = Panel
-        rich_prompt_module.Confirm = Confirm
+        setattr(rich_console_module, "Console", Console)
+        setattr(rich_panel_module, "Panel", Panel)
+        setattr(rich_prompt_module, "Confirm", Confirm)
 
         sys.modules["rich"] = rich_module
         sys.modules["rich.console"] = rich_console_module
@@ -57,7 +58,7 @@ def _install_dependency_stubs() -> None:
         sys.modules["rich.prompt"] = rich_prompt_module
 
 
-def _load_setup_module() -> object:
+def _load_setup_module() -> Any:
     _install_dependency_stubs()
     module_name = "plankton_setup_module"
     module_path = Path(__file__).resolve().parents[2] / "scripts" / "setup.py"
@@ -162,3 +163,56 @@ def test_merge_config_preserves_metadata_keys() -> None:
     assert merged["custom"] == existing["custom"]
     assert merged["languages"] == generated["languages"]
     assert merged["phases"] == generated["phases"]
+
+
+def test_deep_merge_preserves_nested_keys() -> None:
+    """T7: Deep merge preserves nested keys not in generated config."""
+    setup_module = _load_setup_module()
+
+    existing = {
+        "languages": {
+            "typescript": {
+                "enabled": True,
+                "knip": True,
+                "biome_nursery": "error",
+            },
+        },
+    }
+    generated = {
+        "languages": {
+            "typescript": {
+                "enabled": False,
+            },
+            "python": True,
+        },
+    }
+
+    merged = setup_module.merge_config(existing, generated)
+
+    # Generated key overwrites
+    assert merged["languages"]["typescript"]["enabled"] is False
+    assert merged["languages"]["python"] is True
+    # Existing nested key survives
+    assert merged["languages"]["typescript"]["knip"] is True
+    assert merged["languages"]["typescript"]["biome_nursery"] == "error"
+
+
+def test_default_config_no_deprecated_subprocess_keys() -> None:
+    """T8: DEFAULT_CONFIG has no deprecated subprocess keys."""
+    setup_module = _load_setup_module()
+
+    subprocess_config = setup_module.DEFAULT_CONFIG.get("subprocess", {})
+    assert "timeout" not in subprocess_config, "DEFAULT_CONFIG has deprecated subprocess.timeout"
+    assert "model_selection" not in subprocess_config, "DEFAULT_CONFIG has deprecated subprocess.model_selection"
+
+
+def test_default_config_uses_correct_exclusion_key() -> None:
+    """T9: DEFAULT_CONFIG uses security_linter_exclusions, not exclusions."""
+    setup_module = _load_setup_module()
+
+    assert "exclusions" not in setup_module.DEFAULT_CONFIG, (
+        "DEFAULT_CONFIG uses 'exclusions' instead of 'security_linter_exclusions'"
+    )
+    assert "security_linter_exclusions" in setup_module.DEFAULT_CONFIG, (
+        "DEFAULT_CONFIG missing 'security_linter_exclusions' key"
+    )

@@ -11,7 +11,10 @@
   // MD013: Line length
   // Skip code blocks - they naturally have longer lines
   // and wrapping would break their formatting
-  "MD013": false
+  "MD013": {
+    "line_length": 80,
+    "code_blocks": false
+  }
 
   // Uncomment to disable specific rules:
   // "MD033": false   // Inline HTML

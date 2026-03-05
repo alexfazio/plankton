@@ -15,7 +15,8 @@ The wizard will:
 1. **Check Dependencies**: Verify `jaq`, `ruff`, and `uv` are installed.
 2. **Detect Languages**: Scan your project for Python, TypeScript, Docker, etc.
 3. **Configure Hooks**: Interactively enable/disable language enforcement.
-4. **Finalize Environment**: Generate `.claude/hooks/config.json` and ensure hook scripts are executable.
+4. **Finalize Environment**: Generate `.claude/hooks/config.json`
+   and ensure hook scripts are executable.
 
 ## manual setup
 

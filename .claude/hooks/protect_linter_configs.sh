@@ -140,20 +140,19 @@ load_protected_files() {
 is_protected_config() {
   local check_basename="$1"
   local protected_file
-  local protected_files
-  protected_files=$(load_protected_files)
+  # shellcheck disable=SC2312
   while IFS= read -r protected_file; do
     [[ -z "${protected_file}" ]] && continue
     if [[ "${check_basename}" == "${protected_file}" ]]; then
       return 0
     fi
-  done <<<"${protected_files}"
+  done < <(load_protected_files || true)
   return 1
 }
 
 # Check if this is a protected linter config file
-is_protected_config "${basename}"; protected=$?
-if [[ ${protected} -eq 0 ]]; then
+# shellcheck disable=SC2310
+if is_protected_config "${basename}"; then
   cat <<EOF
 {"decision": "block", "reason": "Protected linter config file (${basename}). Fix the code, not the rules."}
 EOF

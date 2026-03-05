@@ -694,7 +694,7 @@ many issues silently:
 
 | File | Description |
 | --- | --- |
-| `scripts/setup.py` | Interactive setup wizard - configures Plankton for your project |
+| `scripts/setup.py` | Interactive setup wizard |
 | `multi_linter.sh` | PostToolUse hook - lints edited files |
 | `protect_linter_configs.sh` | PreToolUse hook - blocks config & hook edits |
 | `enforce_package_managers.sh` | PreToolUse - blocks legacy package managers |
@@ -856,7 +856,7 @@ If the file is missing, all features are enabled with sensible defaults.
 | `…typescript.semgrep` | bool | true | Semgrep session scan for TS/JS |
 | `…typescript.knip` | bool | false | Enable Knip dead code detection |
 | `protected_files` | str[] | 14 configs | Linter configs protected from edits |
-| `security_linter_exclusions` | str[] | .venv/,… | Directories excluded from Python security linters |
+| `security_linter_exclusions` | str[] | .venv/,… | Security linter exclusions |
 | `phases.auto_format` | bool | true | Phase 1 auto-format |
 | `phases.subprocess_delegation` | bool | true | Phase 3 subprocess delegation |
 | `hook_enabled` | bool | true | Master kill switch (disables all linting) |

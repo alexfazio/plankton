@@ -14,10 +14,10 @@ the `.claude/hooks/config.json` configuration file.
 import json
 import os
 import shutil
-import subprocess  # noqa: S404
+import subprocess  # noqa: S404  # nosec B404
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 from rich.console import Console
@@ -82,28 +82,10 @@ DEFAULT_CONFIG = {
         ".semgrep.yml",
         "knip.json",
     ],
-    "exclusions": ["tests/", "docs/", ".venv/", "scripts/", "node_modules/", ".git/", ".claude/"],
+    "security_linter_exclusions": [".venv/", "node_modules/", ".git/"],
     "phases": {"auto_format": True, "subprocess_delegation": True},
     "subprocess": {
-        "timeout": 300,
-        "model_selection": {
-            "sonnet_patterns": (
-                "C901|PLR[0-9]+|PYD[0-9]+|FAST[0-9]+|ASYNC[0-9]+|unresolved-import|MD[0-9]+|D[0-9]+|"
-                "complexity|useExhaustiveDependencies|noFloatingPromises|useAwaitThenable|no-unsafe-argument|"
-                "no-unsafe-assignment|no-unsafe-return|no-unsafe-call|no-unsafe-member-access|"
-                "no-unsafe-type-assertion|no-unsafe-unary-minus|no-unsafe-enum-comparison|no-misused-promises|"
-                "no-unnecessary-type-assertion|no-unnecessary-type-arguments|"
-                "no-unnecessary-boolean-literal-compare|strict-boolean-expressions|await-thenable|"
-                "no-unnecessary-condition|no-confusing-void-expression|no-base-to-string|"
-                "no-redundant-type-constituents|no-duplicate-type-constituents|no-floating-promises|"
-                "no-implied-eval|no-deprecated|no-for-in-array|no-misused-spread|no-array-delete|"
-                "switch-exhaustiveness-check|unbound-method|return-await|only-throw-error|require-await|"
-                "require-array-sort-compare|restrict-plus-operands|restrict-template-expressions|"
-                "prefer-promise-reject-errors|promise-function-async"
-            ),
-            "opus_patterns": "unresolved-attribute|type-assertion",
-            "volume_threshold": 5,
-        },
+        "settings_file": ".claude/subprocess-settings.json",
     },
     "jscpd": {"session_threshold": 3, "scan_dirs": ["src/", "lib/"], "advisory_only": True},
     "package_managers": {
@@ -181,9 +163,13 @@ def load_existing_config() -> dict[str, Any]:
 
 
 def merge_config(existing_config: dict[str, Any], generated_config: dict[str, Any]) -> dict[str, Any]:
-    """Merge generated config into existing config while preserving unknown keys."""
+    """Deep merge generated config into existing, preserving nested keys not in generated."""
     merged = deepcopy(existing_config)
-    merged.update(generated_config)
+    for key, value in generated_config.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = merge_config(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
     return merged
 
 
@@ -260,13 +246,14 @@ def detect_languages() -> dict[str, bool]:
 def configure_languages(defaults: dict[str, bool]) -> dict[str, Any]:  # noqa: PLR0912
     """Interactive wizard to enable/disable languages."""
     console.print("\n[bold blue]Configuration Wizard[/bold blue]")
-    config = deepcopy(DEFAULT_CONFIG)
+    config: dict[str, Any] = deepcopy(DEFAULT_CONFIG)
+    languages = cast("dict[str, Any]", config["languages"])
 
     # Python
     if Confirm.ask("Enable Python enforcement?", default=defaults.get("python", True)):
-        config["languages"]["python"] = True
+        languages["python"] = True
     else:
-        config["languages"]["python"] = False
+        languages["python"] = False
 
     # TypeScript
     if Confirm.ask("Enable TypeScript/JavaScript enforcement?", default=defaults.get("typescript", True)):
@@ -274,31 +261,31 @@ def configure_languages(defaults: dict[str, bool]) -> dict[str, Any]:  # noqa: P
         # If currently boolean in default config, swap to object
         pass  # Keep default object
     else:
-        config["languages"]["typescript"] = False  # Set to false
+        languages["typescript"] = False  # Set to false
 
     # Shell
     if Confirm.ask("Enable Shell Script enforcement?", default=defaults.get("shell", True)):
-        config["languages"]["shell"] = True
+        languages["shell"] = True
     else:
-        config["languages"]["shell"] = False
+        languages["shell"] = False
 
     # Docker
     if Confirm.ask("Enable Dockerfile enforcement?", default=defaults.get("dockerfile", True)):
-        config["languages"]["dockerfile"] = True
+        languages["dockerfile"] = True
     else:
-        config["languages"]["dockerfile"] = False
+        languages["dockerfile"] = False
 
     # Others (group them to be less tedious)
     others = ["yaml", "json", "toml", "markdown"]
     if Confirm.ask("Enable other formats (YAML, JSON, TOML, Markdown)?", default=True):
         for lang in others:
-            config["languages"][lang] = True
+            languages[lang] = True
     else:
         for lang in others:
             if Confirm.ask(f"Enable {lang}?", default=False):
-                config["languages"][lang] = True
+                languages[lang] = True
             else:
-                config["languages"][lang] = False
+                languages[lang] = False
 
     return config
 
@@ -318,7 +305,7 @@ def setup_hooks():
     console.print("  Making hook scripts executable...")
     for script in HOOKS_DIR.glob("*.sh"):
         # S103: Chmod 755 is standard for executable scripts
-        os.chmod(script, 0o755)  # noqa: S103
+        os.chmod(script, 0o755)  # noqa: S103  # nosec B103
         console.print(f"    [green]✓[/green] chmod +x {script.name}")
 
     # Check pre-commit
@@ -326,7 +313,7 @@ def setup_hooks():
         if shutil.which("pre-commit"):
             console.print("  Installing pre-commit hooks...")
             try:
-                subprocess.run(["pre-commit", "install"], check=True)  # noqa: S607
+                subprocess.run(["pre-commit", "install"], check=True)  # noqa: S607  # nosec B603 B607
                 console.print("    [green]✓[/green] pre-commit installed")
             except subprocess.CalledProcessError:
                 console.print("    [red]✗[/red] pre-commit install failed")
@@ -359,6 +346,7 @@ def main():
     console.print(f"\n[bold]Writing configuration to {CONFIG_PATH}...[/bold]")
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(new_config, f, indent=2)
+        f.write("\n")
     console.print("  [green]✓[/green] Configuration saved.")
 
     setup_hooks()
