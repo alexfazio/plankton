@@ -216,3 +216,17 @@ def test_default_config_uses_correct_exclusion_key() -> None:
     assert "security_linter_exclusions" in setup_module.DEFAULT_CONFIG, (
         "DEFAULT_CONFIG missing 'security_linter_exclusions' key"
     )
+
+
+def test_manual_install_hint_uv() -> None:
+    setup_module = _load_setup_module()
+    assert setup_module._manual_install_hint("uv") == "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+
+def test_manual_install_hint_linux_jaq_apt(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+
+    monkeypatch.setattr(setup_module, "system", lambda: "Linux")
+    monkeypatch.setattr(setup_module, "_detect_linux_package_manager", lambda: "apt-get")
+
+    assert setup_module._manual_install_hint("jaq") == "sudo apt-get install -y jaq"

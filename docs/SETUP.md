@@ -7,7 +7,7 @@ The easiest way to set up Plankton is using the **Interactive Setup Wizard**.
 Execute this command in your project root:
 
 ```bash
-uv run --no-project scripts/setup.py
+python3 scripts/setup.py
 ```
 
 The wizard will:
@@ -17,6 +17,18 @@ The wizard will:
 3. **Configure Hooks**: Interactively enable/disable language enforcement.
 4. **Finalize Environment**: Generate `.claude/hooks/config.json`
    and ensure hook scripts are executable.
+
+If `uv` is available, you can also run:
+
+```bash
+uv run --no-project scripts/setup.py
+```
+
+Prefer non-interactive setup? Use:
+
+```bash
+bash scripts/setup.sh
+```
 
 ## manual setup
 

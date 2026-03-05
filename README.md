@@ -17,13 +17,19 @@ Write-time code quality enforcement for AI coding agents, built on Claude Code h
 ```bash
 git clone https://github.com/alexfazio/plankton.git
 cd plankton
-bash scripts/setup.sh   # installs all tools (macOS + Linux)
+python3 scripts/setup.py  # interactive setup wizard (recommended)
 claude                   # hooks activate automatically
 ```
 
 That's it. Plankton works by being the directory you run Claude Code from.
 The hooks in `.claude/hooks/` are picked up automatically — no install
 command, no plugin, no config. Clone, setup, claude.
+
+If you prefer non-interactive setup, use:
+
+```bash
+bash scripts/setup.sh   # non-interactive installer (macOS + Linux)
+```
 
 > [!NOTE]
 > **Windows** is not supported. Use
@@ -109,14 +115,27 @@ agent is blocked from proceeding until its output passes your checks —
 style, types, security, complexity — all enforced before commits and code
 review.
 
-1. **Run the Setup Wizard**:
+1. **Run the Interactive Setup Wizard**:
+
+   ```bash
+   python3 scripts/setup.py
+   ```
+
+   It auto-detects project languages, checks dependencies, and can
+   guide/install missing required tools (`jaq`, `ruff`, `uv`)
+   step-by-step.
+
+   If `uv` is already installed, this also works:
 
    ```bash
    uv run --no-project scripts/setup.py
    ```
 
-   This will auto-detect your project languages, check for
-   installed tools, and generate your configuration.
+   Non-interactive alternative:
+
+   ```bash
+   bash scripts/setup.sh
+   ```
 
 2. **Start a Claude Code session**. Hooks activate automatically.
 
