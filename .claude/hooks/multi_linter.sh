@@ -310,13 +310,14 @@ is_excluded_from_security_linters() {
   fi
 
   local exclusion
-  # shellcheck disable=SC2312
+  local exclusions
+  exclusions=$(get_security_linter_exclusions || true)
   while IFS= read -r exclusion; do
     [[ -z "${exclusion}" ]] && continue
     if [[ "${fp}" == ${exclusion}* ]]; then
       return 0
     fi
-  done < <(get_security_linter_exclusions || true)
+  done <<<"${exclusions}"
   return 1
 }
 

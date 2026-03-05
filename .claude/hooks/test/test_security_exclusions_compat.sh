@@ -193,6 +193,40 @@ assert "test3_vulture" "grep -q 'VULTURE' '${tmp_dir}/test3.stderr'" \
   "vulture finding still appears without exclusions" \
   "vulture finding missing without exclusions"
 
+# ============================================================================
+# Test 4: exclusion function should be shellcheck-clean without SC2312 suppress
+# ============================================================================
+printf "\n--- test4: exclusion loop has no SC2312 suppression ---\n"
+
+func_block="${tmp_dir}/test4_func_block.txt"
+awk '/^is_excluded_from_security_linters\(\)/,/^}/ {print}' \
+  "${hook_dir}/multi_linter.sh" >"${func_block}"
+
+assert "test4_no_sc2312" "! grep -q 'shellcheck disable=SC2312' '${func_block}'" \
+  "is_excluded_from_security_linters has no SC2312 suppression" \
+  "is_excluded_from_security_linters still has SC2312 suppression"
+
+# ============================================================================
+# Test 5: malformed config must not crash set -e exclusion path
+# ============================================================================
+printf "\n--- test5: malformed config does not crash exclusion path ---\n"
+
+test5_dir="${tmp_dir}/test5"
+# Intentionally malformed JSON to force get_security_linter_exclusions parse fail.
+setup_project_dir "${test5_dir}" '{
+  "phases": { "subprocess_delegation": false },
+  "security_linter_exclusions": ["tests/"]
+'
+run_case "${test5_dir}" "test5"
+
+assert "test5_exit" "grep -qx '2' '${tmp_dir}/test5.exit'" \
+  "malformed config path still returns deterministic violations (no hook crash)" \
+  "malformed config path did not return expected exit 2"
+
+assert "test5_b105" "grep -q 'B105' '${tmp_dir}/test5.stderr'" \
+  "malformed config path still executes security linters" \
+  "malformed config path did not execute security linter checks"
+
 printf "\n=== Summary ===\n"
 printf "Passed: %d\nFailed: %d\n" "${passed}" "${failed}"
 [[ "${failed}" -gt 0 ]] && exit 1
