@@ -108,6 +108,24 @@ get_security_linter_exclusions() {
   echo "${CONFIG_JSON}" | jaq -r ".security_linter_exclusions // .exclusions // ${defaults} | .[]" 2>/dev/null
 }
 
+get_bandit_config_file() {
+  local config_file="${CLAUDE_PROJECT_DIR:-.}/pyproject.toml"
+  if [[ -f "${config_file}" ]]; then
+    printf '%s\n' "${config_file}"
+  fi
+}
+
+run_bandit_json() {
+  local target_file="$1"
+  local bandit_config
+  bandit_config=$(get_bandit_config_file)
+  if [[ -n "${bandit_config}" ]]; then
+    uv run bandit -c "${bandit_config}" -f json -q "${target_file}" 2>/dev/null || true
+  else
+    uv run bandit -f json -q "${target_file}" 2>/dev/null || true
+  fi
+}
+
 # Detect and reject old flat config format
 check_config_migration() {
   local has_old_timeout has_old_model_selection
@@ -780,7 +798,7 @@ rerun_phase2() {
       # bandit violations
       if command -v uv >/dev/null 2>&1; then
         local bandit_out
-        bandit_out=$(uv run bandit -f json -q "${fp}" 2>/dev/null) || true
+        bandit_out=$(run_bandit_json "${fp}")
         local bandit_count
         bandit_count=$(echo "${bandit_out}" | jaq '.results | length // 0' 2>/dev/null | head -n1 || echo "0")
         count=$((count + bandit_count))
@@ -1313,7 +1331,7 @@ case "${file_path}" in
     is_excluded_from_security_linters "${file_path}" && _bandit_rc=0 || _bandit_rc=$?
     if [[ ${_bandit_rc} -eq 0 ]]; then _excluded_bandit=true; fi
     if ! "${_excluded_bandit}" && command -v uv >/dev/null 2>&1; then
-      bandit_output=$(uv run bandit -f json -q "${file_path}" 2>/dev/null) || true
+      bandit_output=$(run_bandit_json "${file_path}")
       bandit_results=$(echo "${bandit_output}" | jaq '.results // []' 2>/dev/null) || bandit_results="[]"
       if [[ "${bandit_results}" != "[]" ]] && [[ "${bandit_results}" != "null" ]]; then
         # Convert bandit JSON to standard format

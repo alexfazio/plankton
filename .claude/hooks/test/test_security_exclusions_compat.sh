@@ -77,6 +77,40 @@ case "${cmd}" in
     printf '%s:2: unused variable %s\n' "${target}" "'password'"
     ;;
   bandit)
+    bandit_config=""
+    bandit_target=""
+    while [[ $# -gt 0 ]]; do
+      case "${1}" in
+        -c|--configfile)
+          shift || true
+          bandit_config="${1:-}"
+          ;;
+        -f|--format)
+          shift || true
+          ;;
+        -q|--quiet)
+          ;;
+        -*)
+          ;;
+        *)
+          bandit_target="${1}"
+          ;;
+      esac
+      shift || true
+    done
+
+    if [[ -n "${bandit_config}" ]] \
+      && [[ -f "${bandit_config}" ]] \
+      && grep -Eq 'exclude_dirs\s*=\s*\[[^]]*"tests"' "${bandit_config}" \
+      && [[ "${bandit_target}" == *"/tests/"* ]]; then
+      cat <<'BANDIT_EMPTY_JSON'
+{
+  "results": []
+}
+BANDIT_EMPTY_JSON
+      exit 0
+    fi
+
     cat <<'BANDIT_JSON'
 {
   "results": [
@@ -226,6 +260,35 @@ assert "test5_exit" "grep -qx '2' '${tmp_dir}/test5.exit'" \
 assert "test5_b105" "grep -q 'B105' '${tmp_dir}/test5.stderr'" \
   "malformed config path still executes security linters" \
   "malformed config path did not execute security linter checks"
+
+# ============================================================================
+# Test 6: pyproject bandit exclude_dirs is honored for direct-file scans
+# ============================================================================
+printf "\n--- test6: pyproject bandit excludes tests/ for direct file scans ---\n"
+
+test6_dir="${tmp_dir}/test6"
+setup_project_dir "${test6_dir}" '{
+  "phases": { "subprocess_delegation": false },
+  "security_linter_exclusions": []
+}'
+cat >"${test6_dir}/pyproject.toml" <<'PYPROJECT_EOF'
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = []
+PYPROJECT_EOF
+run_case "${test6_dir}" "test6"
+
+assert "test6_exit" "grep -qx '2' '${tmp_dir}/test6.exit'" \
+  "vulture still reports while bandit excludes tests via pyproject" \
+  "unexpected exit code for pyproject bandit exclusion case"
+
+assert "test6_no_b105" "! grep -q 'B105' '${tmp_dir}/test6.stderr'" \
+  "bandit finding suppressed via pyproject exclude_dirs" \
+  "bandit finding still present despite pyproject exclude_dirs"
+
+assert "test6_vulture_present" "grep -q 'VULTURE' '${tmp_dir}/test6.stderr'" \
+  "vulture finding still appears (bandit-only exclusion behavior)" \
+  "vulture finding unexpectedly missing in pyproject exclusion case"
 
 printf "\n=== Summary ===\n"
 printf "Passed: %d\nFailed: %d\n" "${passed}" "${failed}"
