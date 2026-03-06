@@ -442,16 +442,41 @@ def test_build_effective_config_uses_existing_and_legacy_exclusions() -> None:
     assert effective["security_linter_exclusions"] == ["tests/"]
 
 
+def test_select_sections_rerun_skip_single_edits(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    prompts_seen: list[str] = []
+
+    def fake_ask(prompt: str, default: bool = True) -> bool:
+        prompts_seen.append(prompt)
+        if prompt == "Make targeted edits to specific sections?":
+            return False
+        raise AssertionError(f"Unexpected prompt when single-edit mode declined: {prompt!r}")
+
+    monkeypatch.setattr(setup_module.Confirm, "ask", fake_ask)
+    selected = setup_module.select_sections(has_existing_config=True)
+    assert selected["languages"] is False
+    assert selected["phases"] is False
+    assert selected["security_exclusions"] is False
+    assert selected["package_managers"] is False
+    assert selected["jscpd"] is False
+    assert selected["subprocess"] is False
+    assert prompts_seen == ["Make targeted edits to specific sections?"]
+
+
 def test_select_sections_defaults_on_rerun(monkeypatch) -> None:
     setup_module = _load_setup_module()
     defaults_seen: dict[str, bool] = {}
 
     def fake_ask(prompt: str, default: bool = True) -> bool:
+        if prompt == "Make targeted edits to specific sections?":
+            defaults_seen[prompt] = default
+            return True
         defaults_seen[prompt] = default
         return default
 
     monkeypatch.setattr(setup_module.Confirm, "ask", fake_ask)
     selected = setup_module.select_sections(has_existing_config=True)
+    assert defaults_seen["Make targeted edits to specific sections?"] is False
     assert selected["languages"] is True
     assert selected["phases"] is True
     assert selected["security_exclusions"] is False
@@ -506,6 +531,67 @@ def test_main_no_sections_selected_does_not_rewrite_existing_config(tmp_path: Pa
 
     setup_module.main()
     assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_setup_hooks_installs_pre_commit_when_missing(tmp_path: Path, monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    monkeypatch.chdir(tmp_path)
+
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    (hooks_dir / "multi_linter.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (tmp_path / ".pre-commit-config.yaml").write_text("repos: []\n", encoding="utf-8")
+
+    monkeypatch.setattr(setup_module, "HOOKS_DIR", hooks_dir)
+    monkeypatch.setattr(setup_module.Confirm, "ask", lambda *args, **kwargs: True)
+    monkeypatch.setattr(setup_module.os, "chmod", lambda *args, **kwargs: None)
+
+    installed = {"pre_commit": False}
+    install_attempts: list[tuple[list[str], str]] = []
+    run_calls: list[tuple[list[str], bool]] = []
+
+    def fake_which(tool: str) -> str | None:
+        if tool == "pre-commit":
+            return "/usr/bin/pre-commit" if installed["pre_commit"] else None
+        if tool == "uv":
+            return "/usr/bin/uv"
+        return None
+
+    def fake_run_install(command: list[str], description: str) -> bool:
+        install_attempts.append((command, description))
+        if command == ["uv", "tool", "install", "pre-commit"]:
+            installed["pre_commit"] = True
+            return True
+        return False
+
+    def fake_subprocess_run(command: list[str], check: bool = True):
+        run_calls.append((command, check))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(setup_module.shutil, "which", fake_which)
+    monkeypatch.setattr(setup_module, "_run_install_command", fake_run_install)
+    monkeypatch.setattr(setup_module.subprocess, "run", fake_subprocess_run)
+
+    setup_module.setup_hooks()
+
+    assert install_attempts
+    assert install_attempts[0][0] == ["uv", "tool", "install", "pre-commit"]
+    assert run_calls == [(["pre-commit", "install"], True)]
+
+
+def test_check_tools_reports_required_scope_and_status(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    printed: list[str] = []
+
+    monkeypatch.setattr(setup_module, "_ensure_local_bin_on_path", lambda *args, **kwargs: False)
+    monkeypatch.setattr(setup_module, "_guided_install_missing_tools", lambda missing: [])
+    monkeypatch.setattr(setup_module.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(setup_module.console, "print", lambda msg: printed.append(str(msg)))
+
+    setup_module.check_tools()
+
+    assert any("Required tools: jaq, ruff, uv" in msg for msg in printed)
+    assert any("Required tool status:" in msg for msg in printed)
 
 
 def test_edit_list_items_add_and_remove(monkeypatch) -> None:
