@@ -13,6 +13,7 @@ the `.claude/hooks/config.json` configuration file.
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess  # noqa: S404  # nosec B404
@@ -22,67 +23,117 @@ from platform import system
 from types import SimpleNamespace
 from typing import Any, cast
 
+
+class _FallbackExit(SystemExit):
+    def __init__(self, code: int = 0) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+class _FallbackTyperError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("No command registered on fallback Typer app.")
+
+
+class _FallbackTyper:
+    def __init__(self) -> None:
+        self._main: Any = None
+
+    def command(self):
+        def decorator(func):
+            self._main = func
+            return func
+
+        return decorator
+
+    def __call__(self) -> None:
+        if self._main is None:
+            raise _FallbackTyperError()
+        self._main()
+
+
 typer: Any
 try:
     import typer as _typer
 except ModuleNotFoundError:
-
-    class _FallbackExit(SystemExit):
-        def __init__(self, code: int = 0) -> None:
-            super().__init__(code)
-            self.code = code
-
-    class _FallbackTyper:
-        @staticmethod
-        def command():
-            def decorator(func):
-                return func
-
-            return decorator
-
     typer = SimpleNamespace(Exit=_FallbackExit, Typer=_FallbackTyper)
 else:
     typer = _typer
 
+_RICH_STYLE_TOKENS = {
+    "bold",
+    "dim",
+    "italic",
+    "underline",
+    "blink",
+    "reverse",
+    "strike",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "black",
+}
+_RICH_TAG_PATTERN = re.compile(r"\[([^\]]+)\]")
+
 
 def _strip_rich_markup(value: str) -> str:
-    """Best-effort stripping of rich markup for plain terminal fallback."""
-    cleaned = value
-    while "[" in cleaned and "]" in cleaned:
-        start = cleaned.find("[")
-        end = cleaned.find("]", start)
-        if end == -1:
-            break
-        cleaned = cleaned[:start] + cleaned[end + 1 :]
-    return cleaned
+    """Strip rich-style tags while preserving literal bracket content."""
+
+    def _replace_tag(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        if inner.startswith("/"):
+            inner = inner[1:].strip()
+        tokens = inner.split()
+        if tokens and all(token in _RICH_STYLE_TOKENS for token in tokens):
+            return ""
+        return match.group(0)
+
+    return _RICH_TAG_PATTERN.sub(_replace_tag, value)
 
 
+class _FallbackConsole:
+    @staticmethod
+    def print(*args, **_kwargs) -> None:  # noqa: D102
+        text = " ".join(str(arg) for arg in args)
+        print(_strip_rich_markup(text))
+
+
+class _FallbackPanel:
+    @staticmethod
+    def fit(text: str, style: str = "") -> str:  # noqa: D102
+        del style
+        return text
+
+
+class _FallbackConfirm:
+    @staticmethod
+    def ask(prompt: str, default: bool = True) -> bool:  # noqa: D102
+        suffix = " [Y/n]: " if default else " [y/N]: "
+        answer = input(f"{_strip_rich_markup(prompt)}{suffix}").strip().lower()
+        if not answer:
+            return default
+        return answer in {"y", "yes"}
+
+
+Console: Any
+Panel: Any
+Confirm: Any
 try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.prompt import Confirm
+    from rich.console import Console as _Console
+    from rich.panel import Panel as _Panel
+    from rich.prompt import Confirm as _Confirm
 except ModuleNotFoundError:
-
-    class Console:  # noqa: D101
-        @staticmethod
-        def print(*args, **_kwargs) -> None:  # noqa: D102
-            text = " ".join(str(arg) for arg in args)
-            print(_strip_rich_markup(text))
-
-    class Panel:  # noqa: D101
-        @staticmethod
-        def fit(text: str, style: str = "") -> str:  # noqa: D102
-            del style
-            return text
-
-    class Confirm:  # noqa: D101
-        @staticmethod
-        def ask(prompt: str, default: bool = True) -> bool:  # noqa: D102
-            suffix = " [Y/n]: " if default else " [y/N]: "
-            answer = input(f"{_strip_rich_markup(prompt)}{suffix}").strip().lower()
-            if not answer:
-                return default
-            return answer in {"y", "yes"}
+    Console = _FallbackConsole
+    Panel = _FallbackPanel
+    Confirm = _FallbackConfirm
+else:
+    Console = _Console
+    Panel = _Panel
+    Confirm = _Confirm
 
 
 console = Console()
@@ -165,6 +216,14 @@ DEFAULT_CONFIG = {
 
 SCAN_EXCLUDE_DIRS = {".git", ".venv", "node_modules", ".claude", "__pycache__"}
 LOCAL_BIN_DIR = Path.home() / ".local" / "bin"
+JAQ_LINUX_COMMANDS = {
+    "apt-get": ["apt-get", "install", "-y", "jaq"],
+    "dnf": ["dnf", "install", "-y", "jaq"],
+    "yum": ["yum", "install", "-y", "jaq"],
+    "pacman": ["pacman", "-Sy", "--noconfirm", "jaq"],
+    "apk": ["apk", "add", "jaq"],
+    "zypper": ["zypper", "install", "-y", "jaq"],
+}
 
 
 def _is_excluded_path(path: Path) -> bool:
@@ -235,14 +294,31 @@ def merge_config(existing_config: dict[str, Any], generated_config: dict[str, An
     return merged
 
 
-def _ensure_local_bin_on_path(show_hint: bool = False) -> None:
+def _path_persist_hint() -> str:
+    shell_name = Path(os.environ.get("SHELL", "")).name
+    if shell_name == "bash":
+        return "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc"
+    if shell_name == "zsh":
+        return "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc"
+    if shell_name == "fish":
+        return "fish_add_path ~/.local/bin"
+    return "Add ~/.local/bin to PATH in your shell profile."
+
+
+def _ensure_local_bin_on_path(show_hint: bool = False) -> bool:
     """Ensure ~/.local/bin is available in this process PATH."""
     local_bin = str(LOCAL_BIN_DIR)
-    if LOCAL_BIN_DIR.exists() and local_bin not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = f"{local_bin}:{os.environ.get('PATH', '')}"
-        if show_hint:
-            console.print("  [yellow]![/yellow] Added ~/.local/bin to PATH for this setup run.")
-            console.print("  [yellow]Persist:[/yellow] echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc")
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if not LOCAL_BIN_DIR.exists():
+        return False
+    if local_bin in path_entries:
+        return False
+
+    os.environ["PATH"] = f"{local_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+    if show_hint:
+        console.print("  [yellow]![/yellow] Added ~/.local/bin to PATH for this setup run.")
+        console.print(f"  [yellow]Persist:[/yellow] {_path_persist_hint()}")
+    return True
 
 
 def _detect_linux_package_manager() -> str | None:
@@ -266,8 +342,7 @@ def _run_install_command(command: list[str], description: str) -> bool:
     console.print(f"  [cyan]→[/cyan] {description}")
     console.print(f"    [dim]$ {_render_command(command)}[/dim]")
     try:
-        # nosec B603 B607
-        result = subprocess.run(command, check=False)  # noqa: S603,S607
+        result = subprocess.run(command, check=False)  # noqa: S603,S607  # nosec B603 B607
     except FileNotFoundError:
         console.print("    [red]✗[/red] Installer command not found in PATH.")
         return False
@@ -291,16 +366,11 @@ def _manual_install_hint(tool: str) -> str:
     if os_name != "linux":
         return "bash scripts/setup.sh"
 
-    manager_to_command = {
-        "apt-get": "sudo apt-get install -y jaq",
-        "dnf": "sudo dnf install -y jaq",
-        "yum": "sudo yum install -y jaq",
-        "pacman": "sudo pacman -Sy --noconfirm jaq",
-        "apk": "sudo apk add jaq",
-        "zypper": "sudo zypper install -y jaq",
-    }
     manager = _detect_linux_package_manager()
-    return manager_to_command.get(manager, "bash scripts/setup.sh")
+    command = JAQ_LINUX_COMMANDS.get(manager)
+    if command is None:
+        return "bash scripts/setup.sh"
+    return f"sudo {_render_command(command)}"
 
 
 def _install_uv() -> bool:
@@ -333,16 +403,8 @@ def _install_jaq() -> bool:  # noqa: PLR0911
         console.print(f"  [red]✗[/red] Unsupported OS for automatic jaq install: {os_name}")
         return False
 
-    manager_to_command = {
-        "apt-get": ["apt-get", "install", "-y", "jaq"],
-        "dnf": ["dnf", "install", "-y", "jaq"],
-        "yum": ["yum", "install", "-y", "jaq"],
-        "pacman": ["pacman", "-Sy", "--noconfirm", "jaq"],
-        "apk": ["apk", "add", "jaq"],
-        "zypper": ["zypper", "install", "-y", "jaq"],
-    }
     manager = _detect_linux_package_manager()
-    base_command = manager_to_command.get(manager)
+    base_command = JAQ_LINUX_COMMANDS.get(manager)
     if base_command is None:
         console.print("  [red]✗[/red] Could not detect a supported Linux package manager for jaq.")
         return False
