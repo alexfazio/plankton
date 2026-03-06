@@ -17,9 +17,12 @@ import re
 import shlex
 import shutil
 import subprocess  # noqa: S404  # nosec B404
+import sys
+import urllib.error
+import urllib.request
 from copy import deepcopy
 from pathlib import Path
-from platform import system
+from platform import machine, system
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -60,23 +63,24 @@ except ModuleNotFoundError:
 else:
     typer = _typer
 
-_RICH_STYLE_TOKENS = {
-    "bold",
-    "dim",
-    "italic",
-    "underline",
-    "blink",
-    "reverse",
-    "strike",
-    "red",
-    "green",
-    "yellow",
-    "blue",
-    "magenta",
-    "cyan",
-    "white",
-    "black",
+_ANSI_STYLE_CODES = {
+    "bold": "1",
+    "dim": "2",
+    "italic": "3",
+    "underline": "4",
+    "blink": "5",
+    "reverse": "7",
+    "strike": "9",
+    "black": "30",
+    "red": "31",
+    "green": "32",
+    "yellow": "33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "36",
+    "white": "37",
 }
+_RICH_STYLE_TOKENS = set(_ANSI_STYLE_CODES.keys())
 _RICH_TAG_PATTERN = re.compile(r"\[([^\]]+)\]")
 
 
@@ -95,25 +99,82 @@ def _strip_rich_markup(value: str) -> str:
     return _RICH_TAG_PATTERN.sub(_replace_tag, value)
 
 
+def _supports_ansi_output() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM", "") in {"", "dumb"}:
+        return False
+    return bool(getattr(sys.stdout, "isatty", lambda: False)())
+
+
+def _rich_tag_to_ansi(tag: str) -> str | None:
+    cleaned = tag.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("/"):
+        return "\033[0m"
+    tokens = cleaned.split()
+    codes: list[str] = []
+    for token in tokens:
+        code = _ANSI_STYLE_CODES.get(token)
+        if code is None:
+            return None
+        codes.append(code)
+    return f"\033[{';'.join(codes)}m"
+
+
+def _render_rich_markup(value: str) -> str:
+    """Render rich-style tags to ANSI escape sequences for fallback output."""
+    saw_ansi = False
+
+    def _replace_tag(match: re.Match[str]) -> str:
+        nonlocal saw_ansi
+        inner = match.group(1).strip()
+        ansi = _rich_tag_to_ansi(inner)
+        if ansi is None:
+            return match.group(0)
+        saw_ansi = True
+        return ansi
+
+    rendered = _RICH_TAG_PATTERN.sub(_replace_tag, value)
+    if saw_ansi and not rendered.endswith("\033[0m"):
+        rendered += "\033[0m"
+    return rendered
+
+
 class _FallbackConsole:
     @staticmethod
     def print(*args, **_kwargs) -> None:  # noqa: D102
         text = " ".join(str(arg) for arg in args)
-        print(_strip_rich_markup(text))
+        if _supports_ansi_output():
+            print(_render_rich_markup(text))
+        else:
+            print(_strip_rich_markup(text))
 
 
 class _FallbackPanel:
     @staticmethod
     def fit(text: str, style: str = "") -> str:  # noqa: D102
-        del style
-        return text
+        lines = [_strip_rich_markup(line) for line in str(text).splitlines() or [""]]
+        width = max(len(line) for line in lines)
+        top = f"╭{'─' * (width + 2)}╮"
+        bottom = f"╰{'─' * (width + 2)}╯"
+        body = [f"│ {line.ljust(width)} │" for line in lines]
+        panel = "\n".join([top, *body, bottom])
+
+        if _supports_ansi_output():
+            ansi = _rich_tag_to_ansi(style)
+            if ansi:
+                return f"{ansi}{panel}\033[0m"
+        return panel
 
 
 class _FallbackConfirm:
     @staticmethod
     def ask(prompt: str, default: bool = True) -> bool:  # noqa: D102
         suffix = " [Y/n]: " if default else " [y/N]: "
-        answer = input(f"{_strip_rich_markup(prompt)}{suffix}").strip().lower()
+        prompt_text = _render_rich_markup(prompt) if _supports_ansi_output() else _strip_rich_markup(prompt)
+        answer = input(f"{prompt_text}{suffix}").strip().lower()
         if not answer:
             return default
         return answer in {"y", "yes"}
@@ -294,6 +355,106 @@ def merge_config(existing_config: dict[str, Any], generated_config: dict[str, An
     return merged
 
 
+def build_effective_config(existing_config: dict[str, Any]) -> dict[str, Any]:
+    """Build a fully-populated config by overlaying existing values on defaults."""
+    effective = merge_config(DEFAULT_CONFIG, existing_config)
+    if "security_linter_exclusions" not in existing_config:
+        legacy_exclusions = existing_config.get("exclusions")
+        if isinstance(legacy_exclusions, list):
+            effective["security_linter_exclusions"] = [
+                str(item).strip() for item in legacy_exclusions if str(item).strip()
+            ]
+    return effective
+
+
+def _ask_text(prompt: str, default: str) -> str:
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{prompt}{suffix}: ").strip()
+    return answer or default
+
+
+def _ask_int(prompt: str, default: int, min_value: int = 0) -> int:
+    while True:
+        answer = _ask_text(prompt, str(default))
+        try:
+            value = int(answer)
+        except ValueError:
+            console.print("  [red]✗[/red] Please enter a valid integer.")
+            continue
+        if value < min_value:
+            console.print(f"  [red]✗[/red] Value must be >= {min_value}.")
+            continue
+        return value
+
+
+def _normalize_string_list(items: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in items:
+        cleaned = str(item).strip()
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
+def edit_list_items(title: str, current_items: list[str]) -> list[str]:
+    """Interactively add/remove list entries and return normalized results."""
+    items = _normalize_string_list(current_items)
+    while True:
+        console.print(f"\n[bold]{title}[/bold]")
+        if items:
+            for index, item in enumerate(items, start=1):
+                console.print(f"  {index}. {item}")
+        else:
+            console.print("  (empty)")
+
+        if Confirm.ask("Add an item?", default=False):
+            new_item = _ask_text("  Enter value", "")
+            items = _normalize_string_list([*items, new_item])
+
+        if items and Confirm.ask("Remove an item?", default=False):
+            raw_index = _ask_text("  Number to remove", "")
+            try:
+                remove_index = int(raw_index)
+            except ValueError:
+                console.print("  [red]✗[/red] Invalid number; nothing removed.")
+            else:
+                if 1 <= remove_index <= len(items):
+                    del items[remove_index - 1]
+                else:
+                    console.print("  [red]✗[/red] Number out of range; nothing removed.")
+
+        if not Confirm.ask("Edit this list again?", default=False):
+            break
+
+    return items
+
+
+def select_sections(has_existing_config: bool) -> dict[str, bool]:
+    """Prompt which config sections should be edited on this run."""
+    defaults = {
+        "languages": True,
+        "phases": True,
+        "security_exclusions": not has_existing_config,
+        "package_managers": not has_existing_config,
+        "jscpd": not has_existing_config,
+        "subprocess": not has_existing_config,
+    }
+
+    prompts = [
+        ("languages", "Edit language enforcement settings?"),
+        ("phases", "Edit phases (auto_format, subprocess_delegation)?"),
+        ("security_exclusions", "Edit security linter exclusions?"),
+        ("package_managers", "Edit package manager settings?"),
+        ("jscpd", "Edit JSCPD settings?"),
+        ("subprocess", "Edit subprocess settings?"),
+    ]
+
+    selected: dict[str, bool] = {}
+    for key, prompt in prompts:
+        selected[key] = bool(Confirm.ask(prompt, default=defaults[key]))
+    return selected
+
+
 def _path_persist_hint() -> str:
     shell_name = Path(os.environ.get("SHELL", "")).name
     if shell_name == "bash":
@@ -352,7 +513,64 @@ def _run_install_command(command: list[str], description: str) -> bool:
     return True
 
 
-def _manual_install_hint(tool: str) -> str:
+def _linux_jaq_asset_suffix() -> str | None:
+    normalized_arch = machine().lower()
+    if normalized_arch in {"x86_64", "amd64"}:
+        return "x86_64-unknown-linux-musl"
+    if normalized_arch in {"aarch64", "arm64"}:
+        return "aarch64-unknown-linux-gnu"
+    return None
+
+
+def _fetch_latest_release_asset_url(repo: str, pattern: str) -> str | None:
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    try:
+        with urllib.request.urlopen(api_url, timeout=20) as response:  # noqa: S310  # nosec B310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, urllib.error.URLError):
+        return None
+
+    for asset in payload.get("assets", []):
+        if not isinstance(asset, dict):
+            continue
+        download_url = asset.get("browser_download_url")
+        if isinstance(download_url, str) and pattern in download_url:
+            return download_url
+    return None
+
+
+def _install_jaq_from_release() -> bool:
+    suffix = _linux_jaq_asset_suffix()
+    if suffix is None:
+        console.print(f"  [red]✗[/red] Unsupported Linux architecture for jaq: {machine()}")
+        return False
+
+    download_url = _fetch_latest_release_asset_url("01mf02/jaq", f"jaq-{suffix}")
+    if download_url is None:
+        console.print("  [red]✗[/red] Could not locate jaq binary in latest GitHub release.")
+        return False
+
+    LOCAL_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = LOCAL_BIN_DIR / "jaq.tmp"
+    target_path = LOCAL_BIN_DIR / "jaq"
+
+    try:
+        with (
+            urllib.request.urlopen(download_url, timeout=30) as response,  # noqa: S310  # nosec B310
+            open(temp_path, "wb") as file_handle,
+        ):
+            shutil.copyfileobj(response, file_handle)
+        os.chmod(temp_path, 0o755)  # noqa: S103  # nosec B103
+        temp_path.replace(target_path)
+    except OSError:
+        temp_path.unlink(missing_ok=True)
+        return False
+
+    _ensure_local_bin_on_path(show_hint=True)
+    return shutil.which("jaq") is not None
+
+
+def _manual_install_hint(tool: str) -> str:  # noqa: PLR0911
     os_name = system().lower()
     if tool in {"uv", "ruff"}:
         return f"curl -LsSf https://astral.sh/{tool}/install.sh | sh"
@@ -367,10 +585,13 @@ def _manual_install_hint(tool: str) -> str:
         return "bash scripts/setup.sh"
 
     manager = _detect_linux_package_manager()
+    if manager == "apt-get":
+        return "bash scripts/setup.sh"
+
     command = JAQ_LINUX_COMMANDS.get(manager)
     if command is None:
         return "bash scripts/setup.sh"
-    return f"sudo {_render_command(command)}"
+    return f"sudo {_render_command(command)} (or: bash scripts/setup.sh)"
 
 
 def _install_uv() -> bool:
@@ -405,14 +626,19 @@ def _install_jaq() -> bool:  # noqa: PLR0911
 
     manager = _detect_linux_package_manager()
     base_command = JAQ_LINUX_COMMANDS.get(manager)
-    if base_command is None:
-        console.print("  [red]✗[/red] Could not detect a supported Linux package manager for jaq.")
-        return False
+    if base_command is not None:
+        command = _with_sudo_if_needed(base_command)
+        if _run_install_command(command, f"Installing jaq via {manager}") and shutil.which("jaq") is not None:
+            return True
+        console.print("  [yellow]![/yellow] Package-manager install failed; trying GitHub release binary.")
+    else:
+        console.print("  [yellow]![/yellow] No supported Linux package manager detected; trying GitHub release binary.")
 
-    command = _with_sudo_if_needed(base_command)
-    if not _run_install_command(command, f"Installing jaq via {manager}"):
-        return False
-    return shutil.which("jaq") is not None
+    if _install_jaq_from_release():
+        return True
+
+    console.print("  [red]✗[/red] Could not auto-install jaq.")
+    return False
 
 
 def _guided_install_missing_tools(missing_required: list[str]) -> list[str]:
@@ -489,7 +715,7 @@ def check_tools():
             console.print(f"  [dim]•[/dim] {tool} not found ({desc})")
 
 
-def detect_languages() -> dict[str, bool]:
+def detect_languages() -> dict[str, bool]:  # noqa: PLR0912
     """Detect used languages in the project based on file existence."""
     console.print("\n[bold blue]Detecting Project Languages...[/bold blue]")
     detected = {}
@@ -522,14 +748,63 @@ def detect_languages() -> dict[str, bool]:
     else:
         detected["dockerfile"] = False
 
+    # YAML
+    if _has_any("*.yml") or _has_any("*.yaml"):
+        console.print("  [green]✓[/green] YAML files detected")
+        detected["yaml"] = True
+    else:
+        detected["yaml"] = False
+
+    # JSON
+    if _has_any("*.json"):
+        console.print("  [green]✓[/green] JSON files detected")
+        detected["json"] = True
+    else:
+        detected["json"] = False
+
+    # TOML
+    if Path("pyproject.toml").exists() or _has_any("*.toml"):
+        console.print("  [green]✓[/green] TOML files detected")
+        detected["toml"] = True
+    else:
+        detected["toml"] = False
+
+    # Markdown
+    if _has_any("*.md") or _has_any("*.mdx"):
+        console.print("  [green]✓[/green] Markdown files detected")
+        detected["markdown"] = True
+    else:
+        detected["markdown"] = False
+
     return detected
+
+
+def language_defaults_from_effective(detected: dict[str, bool], effective_config: dict[str, Any]) -> dict[str, bool]:
+    """Resolve language prompt defaults from detected files + current config."""
+    defaults = dict(detected)
+    languages = effective_config.get("languages", {})
+    if not isinstance(languages, dict):
+        return defaults
+
+    simple_languages = ["python", "shell", "dockerfile", "yaml", "json", "toml", "markdown"]
+    for language in simple_languages:
+        existing_value = languages.get(language)
+        if isinstance(existing_value, bool):
+            defaults[language] = existing_value
+
+    existing_typescript = languages.get("typescript")
+    if isinstance(existing_typescript, bool):
+        defaults["typescript"] = existing_typescript
+    elif isinstance(existing_typescript, dict):
+        defaults["typescript"] = bool(existing_typescript.get("enabled", True))
+
+    return defaults
 
 
 def configure_languages(defaults: dict[str, bool]) -> dict[str, Any]:  # noqa: PLR0912
     """Interactive wizard to enable/disable languages."""
     console.print("\n[bold blue]Configuration Wizard[/bold blue]")
-    config: dict[str, Any] = deepcopy(DEFAULT_CONFIG)
-    languages = cast("dict[str, Any]", config["languages"])
+    languages = cast("dict[str, Any]", deepcopy(DEFAULT_CONFIG["languages"]))
 
     # Python
     if Confirm.ask("Enable Python enforcement?", default=defaults.get("python", True)):
@@ -557,19 +832,147 @@ def configure_languages(defaults: dict[str, bool]) -> dict[str, Any]:  # noqa: P
     else:
         languages["dockerfile"] = False
 
-    # Others (group them to be less tedious)
-    others = ["yaml", "json", "toml", "markdown"]
-    if Confirm.ask("Enable other formats (YAML, JSON, TOML, Markdown)?", default=True):
-        for lang in others:
-            languages[lang] = True
-    else:
-        for lang in others:
-            if Confirm.ask(f"Enable {lang}?", default=False):
-                languages[lang] = True
-            else:
-                languages[lang] = False
+    # Format-specific prompts (granular per language)
+    format_prompts = [
+        ("yaml", "Enable YAML enforcement?"),
+        ("json", "Enable JSON enforcement?"),
+        ("toml", "Enable TOML enforcement?"),
+        ("markdown", "Enable Markdown enforcement?"),
+    ]
+    for language, prompt in format_prompts:
+        languages[language] = bool(Confirm.ask(prompt, default=defaults.get(language, True)))
 
-    return config
+    return {"languages": languages}
+
+
+def configure_phases(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Prompt and return phase settings from current effective config."""
+    phases = effective_config.get("phases", {})
+    if not isinstance(phases, dict):
+        phases = {}
+
+    auto_format = bool(phases.get("auto_format", True))
+    subprocess_delegation = bool(phases.get("subprocess_delegation", True))
+
+    return {
+        "phases": {
+            "auto_format": bool(Confirm.ask("Enable auto-format phase?", default=auto_format)),
+            "subprocess_delegation": bool(
+                Confirm.ask("Enable subprocess delegation phase?", default=subprocess_delegation)
+            ),
+        }
+    }
+
+
+def configure_security_exclusions(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Prompt and return security linter exclusions."""
+    exclusions = effective_config.get("security_linter_exclusions")
+    if not isinstance(exclusions, list):
+        exclusions = []
+    exclusion_items = [str(item) for item in exclusions]
+    edited = edit_list_items("Security linter exclusions", exclusion_items)
+    return {"security_linter_exclusions": edited}
+
+
+def configure_package_managers(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Prompt and return package manager settings."""
+    package_managers = effective_config.get("package_managers", {})
+    if not isinstance(package_managers, dict):
+        package_managers = {}
+
+    defaults_pm = cast("dict[str, Any]", DEFAULT_CONFIG["package_managers"])
+    default_allowed = defaults_pm.get("allowed_subcommands", {})
+    if not isinstance(default_allowed, dict):
+        default_allowed = {}
+
+    python_default = str(package_managers.get("python", defaults_pm["python"]))
+    javascript_default = str(package_managers.get("javascript", defaults_pm["javascript"]))
+
+    allowed_subcommands = package_managers.get("allowed_subcommands", {})
+    if not isinstance(allowed_subcommands, dict):
+        allowed_subcommands = {}
+
+    updated_allowed: dict[str, list[str]] = {}
+    for manager, default_commands in default_allowed.items():
+        current = allowed_subcommands.get(manager, default_commands)
+        if isinstance(current, list):
+            current_list = [str(item) for item in current]
+        elif isinstance(default_commands, list):
+            current_list = [str(item) for item in default_commands]
+        else:
+            current_list = []
+        updated_allowed[manager] = edit_list_items(f"Allowed subcommands for {manager}", current_list)
+
+    return {
+        "package_managers": {
+            "python": _ask_text("Python package manager", python_default),
+            "javascript": _ask_text("JavaScript package manager", javascript_default),
+            "allowed_subcommands": updated_allowed,
+        }
+    }
+
+
+def configure_jscpd(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Prompt and return JSCPD settings."""
+    jscpd = effective_config.get("jscpd", {})
+    if not isinstance(jscpd, dict):
+        jscpd = {}
+
+    default_jscpd = cast("dict[str, Any]", DEFAULT_CONFIG["jscpd"])
+    threshold_default = jscpd.get("session_threshold", default_jscpd["session_threshold"])
+    try:
+        threshold_default_int = int(threshold_default)
+    except (TypeError, ValueError):
+        threshold_default_int = int(default_jscpd["session_threshold"])
+
+    advisory_default = bool(jscpd.get("advisory_only", default_jscpd["advisory_only"]))
+    current_scan_dirs = jscpd.get("scan_dirs", default_jscpd["scan_dirs"])
+    scan_dirs = [str(item) for item in current_scan_dirs] if isinstance(current_scan_dirs, list) else ["src/", "lib/"]
+
+    return {
+        "jscpd": {
+            "session_threshold": _ask_int("JSCPD session threshold", threshold_default_int, min_value=1),
+            "scan_dirs": edit_list_items("JSCPD scan directories", scan_dirs),
+            "advisory_only": bool(Confirm.ask("Run JSCPD as advisory only?", default=advisory_default)),
+        }
+    }
+
+
+def configure_subprocess(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Prompt and return subprocess settings."""
+    subprocess_cfg = effective_config.get("subprocess", {})
+    if not isinstance(subprocess_cfg, dict):
+        subprocess_cfg = {}
+
+    default_subprocess = cast("dict[str, Any]", DEFAULT_CONFIG["subprocess"])
+    default_settings = str(subprocess_cfg.get("settings_file", default_subprocess["settings_file"]))
+    settings_file = _ask_text("Subprocess settings file", default_settings).strip()
+    if not settings_file:
+        settings_file = default_settings
+
+    return {"subprocess": {"settings_file": settings_file}}
+
+
+def configure_selected_sections(
+    effective_config: dict[str, Any], language_defaults: dict[str, bool], selected_sections: dict[str, bool]
+) -> dict[str, Any]:
+    """Build generated config by prompting only selected sections."""
+    generated: dict[str, Any] = {}
+
+    if selected_sections.get("languages"):
+        generated = merge_config(generated, configure_languages(language_defaults))
+    if selected_sections.get("phases"):
+        generated = merge_config(generated, configure_phases(effective_config))
+    if selected_sections.get("security_exclusions"):
+        generated = merge_config(generated, configure_security_exclusions(effective_config))
+    if selected_sections.get("package_managers"):
+        generated = merge_config(generated, configure_package_managers(effective_config))
+    if selected_sections.get("jscpd"):
+        generated = merge_config(generated, configure_jscpd(effective_config))
+    if selected_sections.get("subprocess"):
+        generated = merge_config(generated, configure_subprocess(effective_config))
+
+    return generated
 
 
 def setup_hooks():
@@ -610,17 +1013,27 @@ def main():
 
     check_tools()
 
-    detected_langs = detect_languages()
-    prompt_defaults = load_language_defaults(detected_langs)
-
     existing_config = load_existing_config()
+    effective_config = build_effective_config(existing_config)
+    detected_langs = detect_languages()
+    prompt_defaults = language_defaults_from_effective(detected_langs, effective_config)
+
     if existing_config:
         console.print(f"  [dim]Loaded existing configuration from {CONFIG_PATH}[/dim]")
     elif CONFIG_PATH.exists():
         console.print(f"  [yellow]Could not parse existing {CONFIG_PATH}, starting fresh.[/yellow]")
 
-    new_config = configure_languages(prompt_defaults)
-    new_config = merge_config(existing_config, new_config)
+    section_selection = select_sections(has_existing_config=bool(existing_config))
+    if not any(section_selection.values()):
+        if existing_config:
+            console.print("  [yellow]![/yellow] No sections selected; existing configuration will be kept unchanged.")
+            new_config = existing_config
+        else:
+            console.print("  [red]✗[/red] No sections selected and no existing config found; aborting.")
+            raise typer.Exit(code=1)
+    else:
+        generated_config = configure_selected_sections(effective_config, prompt_defaults, section_selection)
+        new_config = merge_config(existing_config, generated_config)
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 

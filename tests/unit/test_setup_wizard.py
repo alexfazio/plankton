@@ -232,7 +232,7 @@ def test_manual_install_hint_linux_jaq_apt(monkeypatch) -> None:
     monkeypatch.setattr(setup_module, "system", lambda: "Linux")
     monkeypatch.setattr(setup_module, "_detect_linux_package_manager", lambda: "apt-get")
 
-    assert setup_module._manual_install_hint("jaq") == "sudo apt-get install -y jaq"
+    assert setup_module._manual_install_hint("jaq") == "bash scripts/setup.sh"
 
 
 def test_fallback_typer_calls_registered_command() -> None:
@@ -259,6 +259,21 @@ def test_strip_rich_markup_preserves_literal_brackets() -> None:
     setup_module = _load_setup_module()
     value = "[bold]Ready[/bold] [Y/n] keep [literal]"
     assert setup_module._strip_rich_markup(value) == "Ready [Y/n] keep [literal]"
+
+
+def test_render_rich_markup_emits_ansi_sequences() -> None:
+    setup_module = _load_setup_module()
+    rendered = setup_module._render_rich_markup("[bold green]ok[/bold green]")
+    assert "\x1b[" in rendered
+    assert "ok" in rendered
+
+
+def test_fallback_panel_fit_draws_box() -> None:
+    setup_module = _load_setup_module()
+    panel = setup_module._FallbackPanel.fit("Plankton Setup Wizard")
+    assert "Plankton Setup Wizard" in panel
+    assert "╭" in panel
+    assert "╰" in panel
 
 
 def test_ensure_local_bin_on_path_uses_path_tokens(tmp_path: Path, monkeypatch) -> None:
@@ -337,10 +352,151 @@ def test_guided_install_returns_remaining_missing(monkeypatch, tmp_path: Path) -
 def test_manual_hint_uses_shared_jaq_linux_commands(monkeypatch) -> None:
     setup_module = _load_setup_module()
     monkeypatch.setattr(setup_module, "system", lambda: "Linux")
-    monkeypatch.setattr(setup_module, "_detect_linux_package_manager", lambda: "apt-get")
+    monkeypatch.setattr(setup_module, "_detect_linux_package_manager", lambda: "dnf")
     monkeypatch.setitem(
         setup_module.JAQ_LINUX_COMMANDS,
-        "apt-get",
-        ["apt-get", "install", "-y", "jaq", "--from-shared-map"],
+        "dnf",
+        ["dnf", "install", "-y", "jaq", "--from-shared-map"],
     )
     assert "--from-shared-map" in setup_module._manual_install_hint("jaq")
+
+
+def test_install_jaq_falls_back_to_release(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    monkeypatch.setattr(setup_module, "system", lambda: "Linux")
+    monkeypatch.setattr(setup_module, "_detect_linux_package_manager", lambda: "apt-get")
+    monkeypatch.setattr(setup_module, "_with_sudo_if_needed", lambda command: command)
+    monkeypatch.setattr(setup_module, "_run_install_command", lambda *args, **kwargs: False)
+    monkeypatch.setattr(setup_module, "_install_jaq_from_release", lambda: True)
+    assert setup_module._install_jaq() is True
+
+
+def test_configure_languages_prompts_each_other_format(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    prompts: list[str] = []
+
+    def fake_ask(prompt: str, default: bool = True) -> bool:
+        prompts.append(prompt)
+        return default
+
+    monkeypatch.setattr(setup_module.Confirm, "ask", fake_ask)
+    config = setup_module.configure_languages(
+        {
+            "python": True,
+            "typescript": True,
+            "shell": True,
+            "dockerfile": True,
+            "yaml": True,
+            "json": False,
+            "toml": True,
+            "markdown": False,
+        }
+    )
+
+    assert "Enable YAML enforcement?" in prompts
+    assert "Enable JSON enforcement?" in prompts
+    assert "Enable TOML enforcement?" in prompts
+    assert "Enable Markdown enforcement?" in prompts
+    assert config["languages"]["yaml"] is True
+    assert config["languages"]["json"] is False
+    assert config["languages"]["toml"] is True
+    assert config["languages"]["markdown"] is False
+
+
+def test_build_effective_config_uses_existing_and_legacy_exclusions() -> None:
+    setup_module = _load_setup_module()
+    effective = setup_module.build_effective_config(
+        {
+            "languages": {"python": False},
+            "phases": {"auto_format": False},
+            "exclusions": ["tests/"],
+        }
+    )
+    assert effective["languages"]["python"] is False
+    assert effective["phases"]["auto_format"] is False
+    assert effective["security_linter_exclusions"] == ["tests/"]
+
+
+def test_select_sections_defaults_on_rerun(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    defaults_seen: dict[str, bool] = {}
+
+    def fake_ask(prompt: str, default: bool = True) -> bool:
+        defaults_seen[prompt] = default
+        return default
+
+    monkeypatch.setattr(setup_module.Confirm, "ask", fake_ask)
+    selected = setup_module.select_sections(has_existing_config=True)
+    assert selected["languages"] is True
+    assert selected["phases"] is True
+    assert selected["security_exclusions"] is False
+    assert selected["package_managers"] is False
+    assert selected["jscpd"] is False
+    assert selected["subprocess"] is False
+
+
+def test_edit_list_items_add_and_remove(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    answers = iter([True, False, True, False, True, False])
+    inputs = iter(["c", "2"])
+
+    monkeypatch.setattr(setup_module.Confirm, "ask", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(setup_module, "_ask_text", lambda *args, **kwargs: next(inputs))
+
+    result = setup_module.edit_list_items("Test List", ["a", "b"])
+    assert result == ["a", "c"]
+
+
+def test_configure_package_managers_uses_current_values(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    effective = {
+        "package_managers": {
+            "python": "pip",
+            "javascript": "npm",
+            "allowed_subcommands": {
+                "npm": ["audit"],
+                "pip": ["download"],
+                "yarn": [],
+                "pnpm": [],
+                "poetry": [],
+                "pipenv": [],
+            },
+        }
+    }
+
+    monkeypatch.setattr(setup_module, "_ask_text", lambda prompt, default: default)
+    monkeypatch.setattr(setup_module, "edit_list_items", lambda title, current_items: current_items)
+
+    package_managers = setup_module.configure_package_managers(effective)
+    assert package_managers["package_managers"]["python"] == "pip"
+    assert package_managers["package_managers"]["javascript"] == "npm"
+    assert package_managers["package_managers"]["allowed_subcommands"]["npm"] == ["audit"]
+
+
+def test_configure_selected_sections_only_updates_selected(monkeypatch) -> None:
+    setup_module = _load_setup_module()
+    effective = setup_module.build_effective_config({})
+    language_defaults = {
+        "python": True,
+        "typescript": True,
+        "shell": True,
+        "dockerfile": True,
+        "yaml": True,
+        "json": True,
+        "toml": True,
+        "markdown": True,
+    }
+    selected = {
+        "languages": False,
+        "phases": True,
+        "security_exclusions": False,
+        "package_managers": False,
+        "jscpd": False,
+        "subprocess": False,
+    }
+
+    monkeypatch.setattr(setup_module.Confirm, "ask", lambda *args, **kwargs: kwargs.get("default", True))
+    generated = setup_module.configure_selected_sections(effective, language_defaults, selected)
+    assert "phases" in generated
+    assert "languages" not in generated
+    assert "package_managers" not in generated
