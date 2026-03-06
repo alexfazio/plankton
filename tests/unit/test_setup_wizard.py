@@ -539,6 +539,8 @@ def test_ask_text_returns_default_on_eof(monkeypatch) -> None:
 def test_ask_int_returns_default_on_eof(monkeypatch) -> None:
     setup_module = _load_setup_module()
     monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(EOFError))
+    # _ask_int delegates to _ask_text(..., str(default)); on EOF that path
+    # returns the default string, which _ask_int converts back to int.
     assert setup_module._ask_int("Prompt", 7, min_value=0) == 7
 
 
