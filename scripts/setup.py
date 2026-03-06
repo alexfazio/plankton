@@ -19,6 +19,7 @@ import shutil
 import subprocess  # noqa: S404  # nosec B404
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from copy import deepcopy
 from pathlib import Path
@@ -297,37 +298,6 @@ def _has_any(pattern: str) -> bool:
     return any(match.is_file() and not _is_excluded_path(match) for match in Path(".").rglob(pattern))
 
 
-def load_language_defaults(detected: dict[str, bool]) -> dict[str, bool]:
-    """Merge detected language defaults with existing config language choices."""
-    defaults = dict(detected)
-    if not CONFIG_PATH.exists():
-        return defaults
-
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as file_handle:
-            existing_config = json.load(file_handle)
-    except Exception:
-        return defaults
-
-    languages = existing_config.get("languages")
-    if not isinstance(languages, dict):
-        return defaults
-
-    simple_languages = ["python", "shell", "dockerfile", "yaml", "json", "toml", "markdown"]
-    for language in simple_languages:
-        existing_value = languages.get(language)
-        if isinstance(existing_value, bool):
-            defaults[language] = existing_value
-
-    existing_typescript = languages.get("typescript")
-    if isinstance(existing_typescript, bool):
-        defaults["typescript"] = existing_typescript
-    elif isinstance(existing_typescript, dict):
-        defaults["typescript"] = bool(existing_typescript.get("enabled", True))
-
-    return defaults
-
-
 def load_existing_config() -> dict[str, Any]:
     """Load existing config file if present and valid, else return empty dict."""
     if not CONFIG_PATH.exists():
@@ -369,7 +339,11 @@ def build_effective_config(existing_config: dict[str, Any]) -> dict[str, Any]:
 
 def _ask_text(prompt: str, default: str) -> str:
     suffix = f" [{default}]" if default else ""
-    answer = input(f"{prompt}{suffix}: ").strip()
+    try:
+        answer = input(f"{prompt}{suffix}: ").strip()
+    except EOFError:
+        console.print("  [yellow]![/yellow] Input closed; using default value.")
+        return default
     return answer or default
 
 
@@ -534,7 +508,11 @@ def _fetch_latest_release_asset_url(repo: str, pattern: str) -> str | None:
         if not isinstance(asset, dict):
             continue
         download_url = asset.get("browser_download_url")
-        if isinstance(download_url, str) and pattern in download_url:
+        if not isinstance(download_url, str):
+            continue
+        parsed = urllib.parse.urlparse(download_url)
+        filename = Path(parsed.path).name
+        if filename == pattern:
             return download_url
     return None
 
@@ -1024,10 +1002,10 @@ def main():
         console.print(f"  [yellow]Could not parse existing {CONFIG_PATH}, starting fresh.[/yellow]")
 
     section_selection = select_sections(has_existing_config=bool(existing_config))
+    new_config: dict[str, Any] | None = None
     if not any(section_selection.values()):
         if existing_config:
             console.print("  [yellow]![/yellow] No sections selected; existing configuration will be kept unchanged.")
-            new_config = existing_config
         else:
             console.print("  [red]✗[/red] No sections selected and no existing config found; aborting.")
             raise typer.Exit(code=1)
@@ -1035,14 +1013,15 @@ def main():
         generated_config = configure_selected_sections(effective_config, prompt_defaults, section_selection)
         new_config = merge_config(existing_config, generated_config)
 
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write config
-    console.print(f"\n[bold]Writing configuration to {CONFIG_PATH}...[/bold]")
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(new_config, f, indent=2)
-        f.write("\n")
-    console.print("  [green]✓[/green] Configuration saved.")
+    if new_config is not None:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        console.print(f"\n[bold]Writing configuration to {CONFIG_PATH}...[/bold]")
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(new_config, f, indent=2)
+            f.write("\n")
+        console.print("  [green]✓[/green] Configuration saved.")
+    else:
+        console.print("\n[bold]Configuration unchanged; skipping file write.[/bold]")
 
     setup_hooks()
 
