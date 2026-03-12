@@ -8,7 +8,7 @@
 """Interactive setup wizard for Plankton.
 
 Detects project languages, checks dependencies, and generates
-the `.claude/hooks/config.json` configuration file.
+the `.plankton/config.json` configuration file (with legacy fallback).
 """
 
 import json
@@ -201,7 +201,8 @@ else:
 console = Console()
 app = typer.Typer()
 
-CONFIG_PATH = Path(".claude/hooks/config.json")
+CONFIG_PATH = Path(".plankton/config.json")
+LEGACY_CONFIG_PATH = Path(".claude/hooks/config.json")
 HOOKS_DIR = Path(".claude/hooks")
 
 REQUIRED_TOOLS = {
@@ -260,6 +261,7 @@ DEFAULT_CONFIG = {
     "phases": {"auto_format": True, "subprocess_delegation": True},
     "subprocess": {
         "settings_file": ".claude/subprocess-settings.json",
+        "delegate_cmd": "auto",
     },
     "jscpd": {"session_threshold": 3, "scan_dirs": ["src/", "lib/"], "advisory_only": True},
     "package_managers": {
@@ -276,7 +278,7 @@ DEFAULT_CONFIG = {
     },
 }
 
-SCAN_EXCLUDE_DIRS = {".git", ".venv", "node_modules", ".claude", "__pycache__"}
+SCAN_EXCLUDE_DIRS = {".git", ".venv", "node_modules", ".claude", ".plankton", "__pycache__"}
 LOCAL_BIN_DIR = Path.home() / ".local" / "bin"
 JAQ_LINUX_COMMANDS = {
     "apt-get": ["apt-get", "install", "-y", "jaq"],
@@ -293,25 +295,95 @@ def _is_excluded_path(path: Path) -> bool:
     return any(part in SCAN_EXCLUDE_DIRS for part in path.parts)
 
 
+def detect_agents() -> dict[str, bool]:
+    """Detect which coding agent CLIs are available on PATH."""
+    return {
+        "claude": shutil.which("claude") is not None,
+        "pi": shutil.which("pi") is not None,
+        "opencode": shutil.which("opencode") is not None,
+    }
+
+
+PI_ADAPTER_PATH = Path(".pi/extensions/plankton.ts")
+OPENCODE_ADAPTER_PATH = Path(".opencode/plugins/plankton.ts")
+OPENCODE_CONFIG_PATH = Path("opencode.json")
+
+
+def _migrate_legacy_config() -> bool:
+    """Copy .claude/hooks/config.json to .plankton/config.json if needed.
+
+    Returns True if migration happened.
+    """
+    if CONFIG_PATH.exists():
+        return False
+    if not LEGACY_CONFIG_PATH.exists():
+        return False
+
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(LEGACY_CONFIG_PATH, CONFIG_PATH)
+    console.print(f"  [green]\u2713[/green] Migrated config from {LEGACY_CONFIG_PATH} to {CONFIG_PATH}")
+    return True
+
+
+def setup_pi_adapter(project_root: Path) -> None:
+    """Write the Pi extension adapter if not already present."""
+    adapter = project_root / PI_ADAPTER_PATH
+    if adapter.exists():
+        console.print(f"  [dim]Pi adapter already exists at {PI_ADAPTER_PATH}[/dim]")
+        return
+    adapter.parent.mkdir(parents=True, exist_ok=True)
+    # Read the shipped adapter template
+    shipped = project_root / ".pi" / "extensions" / "plankton.ts"
+    if shipped.exists():
+        console.print(f"  [green]\u2713[/green] Pi adapter present at {PI_ADAPTER_PATH}")
+    else:
+        console.print(f"  [yellow]![/yellow] Pi adapter not found at {PI_ADAPTER_PATH}; create it manually.")
+
+
+def setup_opencode_adapter(project_root: Path) -> None:
+    """Write the OpenCode plugin adapter if not already present."""
+    adapter = project_root / OPENCODE_ADAPTER_PATH
+    if adapter.exists():
+        console.print(f"  [dim]OpenCode adapter already exists at {OPENCODE_ADAPTER_PATH}[/dim]")
+        return
+    adapter.parent.mkdir(parents=True, exist_ok=True)
+    shipped = project_root / ".opencode" / "plugins" / "plankton.ts"
+    if shipped.exists():
+        console.print(f"  [green]\u2713[/green] OpenCode adapter present at {OPENCODE_ADAPTER_PATH}")
+    else:
+        console.print(
+            f"  [yellow]![/yellow] OpenCode adapter not found at {OPENCODE_ADAPTER_PATH}; create it manually."
+        )
+
+    # Ensure opencode.json references the plugin
+    oc_config = project_root / OPENCODE_CONFIG_PATH
+    if not oc_config.exists():
+        oc_config.write_text(json.dumps({"plugin": [str(OPENCODE_ADAPTER_PATH)]}, indent=2) + "\n")
+        console.print(f"  [green]\u2713[/green] Created {OPENCODE_CONFIG_PATH}")
+
+
 def _has_any(pattern: str) -> bool:
     """Return True if a non-excluded file matching pattern exists anywhere."""
     return any(match.is_file() and not _is_excluded_path(match) for match in Path(".").rglob(pattern))
 
 
 def load_existing_config() -> dict[str, Any]:
-    """Load existing config file if present and valid, else return empty dict."""
-    if not CONFIG_PATH.exists():
-        return {}
+    """Load existing config file if present and valid, else return empty dict.
 
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as file_handle:
-            existing_config = json.load(file_handle)
-    except Exception:
-        return {}
-
-    if not isinstance(existing_config, dict):
-        return {}
-    return existing_config
+    Checks CONFIG_PATH (.plankton/config.json) first, falls back to
+    LEGACY_CONFIG_PATH (.claude/hooks/config.json).
+    """
+    for candidate in (CONFIG_PATH, LEGACY_CONFIG_PATH):
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as file_handle:
+                existing_config = json.load(file_handle)
+        except Exception:  # noqa: S112  # intentional: try next candidate on parse failure
+            continue
+        if isinstance(existing_config, dict):
+            return existing_config
+    return {}
 
 
 def merge_config(existing_config: dict[str, Any], generated_config: dict[str, Any]) -> dict[str, Any]:
@@ -995,7 +1067,12 @@ def configure_subprocess(effective_config: dict[str, Any]) -> dict[str, Any]:
     if not settings_file:
         settings_file = default_settings
 
-    return {"subprocess": {"settings_file": settings_file}}
+    default_delegate = str(subprocess_cfg.get("delegate_cmd", default_subprocess.get("delegate_cmd", "auto")))
+    delegate_cmd = _ask_text("Agent CLI for delegation (auto/claude/pi/opencode/none)", default_delegate).strip()
+    if not delegate_cmd:
+        delegate_cmd = default_delegate
+
+    return {"subprocess": {"settings_file": settings_file, "delegate_cmd": delegate_cmd}}
 
 
 def configure_selected_sections(
@@ -1054,6 +1131,20 @@ def _ensure_pre_commit_ready() -> None:
     _install_pre_commit_hooks()
 
 
+def _detect_and_setup_agents() -> None:
+    console.print("\n[bold blue]Detecting Agent CLIs...[/bold blue]")
+    agents = detect_agents()
+    for agent_name, found in agents.items():
+        if found:
+            console.print(f"  [green]\u2713[/green] {agent_name} found")
+        else:
+            console.print(f"  [dim]\u2022[/dim] {agent_name} not found")
+    if agents["pi"]:
+        setup_pi_adapter(Path("."))
+    if agents["opencode"]:
+        setup_opencode_adapter(Path("."))
+
+
 def setup_hooks():
     """Ensure hooks directory exists and scripts are executable."""
     console.print("\n[bold blue]Setting up Hooks...[/bold blue]")
@@ -1082,6 +1173,7 @@ def main():
 
     check_tools()
 
+    _migrate_legacy_config()
     existing_config = load_existing_config()
     effective_config = build_effective_config(existing_config)
     detected_langs = detect_languages()
@@ -1116,8 +1208,10 @@ def main():
 
     setup_hooks()
 
+    _detect_and_setup_agents()
+
     console.print("\n[bold green]Setup Complete![/bold green]")
-    console.print("Run a Claude Code session to start using Plankton.")
+    console.print("Run a coding agent session to start using Plankton.")
     console.print("To test hooks manually: [cyan].claude/hooks/test_hook.sh --self-test[/cyan]")
 
 

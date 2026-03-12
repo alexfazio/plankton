@@ -10,6 +10,22 @@
 
 set -euo pipefail
 
+# Agent-agnostic project dir
+PROJECT_DIR="${PLANKTON_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-.}}"
+
+# Config resolution: PLANKTON_CONFIG > .plankton/config.json > .claude/hooks/config.json (legacy)
+_resolve_config_path() {
+  if [[ -n "${PLANKTON_CONFIG:-}" ]]; then
+    echo "${PLANKTON_CONFIG}"
+  elif [[ -f "${PROJECT_DIR}/.plankton/config.json" ]]; then
+    echo "${PROJECT_DIR}/.plankton/config.json"
+  elif [[ -f "${PROJECT_DIR}/.claude/hooks/config.json" ]]; then
+    echo "${PROJECT_DIR}/.claude/hooks/config.json"
+  else
+    echo ""
+  fi
+}
+
 # Session-level bypass (HOOK_SKIP_PM=1 claude ...)
 if [[ "${HOOK_SKIP_PM:-0}" == "1" ]]; then
   echo '{"decision": "approve"}'; exit 0
@@ -50,7 +66,7 @@ if [[ "${cmd}" == *'<<'* ]]; then
 fi
 
 
-config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+config_file=$(_resolve_config_path)
 
 # get_pm_enforcement(lang) — reads .package_managers.<lang> from config
 # Returns "uv", "uv:warn", "bun", "bun:warn", or "false"

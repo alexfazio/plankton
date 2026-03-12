@@ -1953,7 +1953,7 @@ DIS_EOF
   echo "--- Portability Tests ---"
 
   # Structural: venv PATH prepend exists in multi_linter.sh (ISSUE 1 fix)
-  if grep -q 'CLAUDE_PROJECT_DIR.*\.venv/bin' "${script_dir}/multi_linter.sh"; then
+  if grep -q 'PROJECT_DIR.*.venv/bin' "${script_dir}/multi_linter.sh"; then
     echo "PASS venv_path_prepend: hook prepends .venv/bin to PATH"
     passed=$((passed + 1))
   else

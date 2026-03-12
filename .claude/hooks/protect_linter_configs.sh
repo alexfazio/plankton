@@ -1,5 +1,5 @@
 #!/bin/bash
-# protect_linter_configs.sh - Claude Code PreToolUse hook
+# protect_linter_configs.sh - PreToolUse hook (agent-agnostic)
 # shellcheck disable=SC2310  # functions in if/|| is intentional
 # Blocks modification of linter configuration files (defense layer 4)
 #
@@ -11,6 +11,22 @@
 #   {"decision": "block", "reason": "..."} - Block operation
 
 set -euo pipefail
+
+# Agent-agnostic project dir
+PROJECT_DIR="${PLANKTON_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-.}}"
+
+# Config resolution: PLANKTON_CONFIG > .plankton/config.json > .claude/hooks/config.json (legacy)
+_resolve_config_path() {
+  if [[ -n "${PLANKTON_CONFIG:-}" ]]; then
+    echo "${PLANKTON_CONFIG}"
+  elif [[ -f "${PROJECT_DIR}/.plankton/config.json" ]]; then
+    echo "${PROJECT_DIR}/.plankton/config.json"
+  elif [[ -f "${PROJECT_DIR}/.claude/hooks/config.json" ]]; then
+    echo "${PROJECT_DIR}/.claude/hooks/config.json"
+  else
+    echo ""
+  fi
+}
 
 # Read JSON input from stdin
 input=$(cat)
@@ -35,6 +51,7 @@ fi
 is_hook_test_path() {
   local p="$1"
   if [[ "${p}" == ".claude/hooks/test/"* ]] || [[ "${p}" == *"/.claude/hooks/test/"* ]]; then return 0; fi
+  if [[ "${p}" == ".plankton/test/"* ]] || [[ "${p}" == *"/.plankton/test/"* ]]; then return 0; fi
   return 1
 }
 
@@ -46,25 +63,30 @@ fi
 # Get basename for matching
 basename=$(basename "${file_path}")
 
-# Path-based protection for .claude/ directory
-# Protects hooks directory, settings files, and subprocess settings
-# Matches both relative (.claude/...) and absolute (*/.claude/...) paths
-is_protected_claude_path() {
+# Dynamic path protection for agent config directories
+# Default protects .claude and .plankton; Pi/OpenCode adapters add their dirs
+PLANKTON_PROTECTED_DIRS="${PLANKTON_PROTECTED_DIRS:-.claude:.plankton}"
+
+is_protected_agent_path() {
   local p="$1"
-  # .claude/hooks/* (relative or absolute)
-  if [[ "${p}" == ".claude/hooks/"* ]] || [[ "${p}" == *"/.claude/hooks/"* ]]; then return 0; fi
-  # .claude/settings.json
-  if [[ "${p}" == ".claude/settings.json" ]] || [[ "${p}" == *"/.claude/settings.json" ]]; then return 0; fi
-  # .claude/settings.local.json
-  if [[ "${p}" == ".claude/settings.local.json" ]] || [[ "${p}" == *"/.claude/settings.local.json" ]]; then return 0; fi
-  # .claude/subprocess-settings.json
-  if [[ "${p}" == ".claude/subprocess-settings.json" ]] || [[ "${p}" == *"/.claude/subprocess-settings.json" ]]; then return 0; fi
+  local saved_ifs="${IFS}"
+  IFS=':'
+  for dir in ${PLANKTON_PROTECTED_DIRS}; do
+    if [[ "${p}" == "${dir}/hooks/"* ]] || [[ "${p}" == *"/${dir}/hooks/"* ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/settings.json" ]] || [[ "${p}" == *"/${dir}/settings.json" ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/settings.local.json" ]] || [[ "${p}" == *"/${dir}/settings.local.json" ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/subprocess-settings.json" ]] || [[ "${p}" == *"/${dir}/subprocess-settings.json" ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/extensions/"* ]] || [[ "${p}" == *"/${dir}/extensions/"* ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/plugins/"* ]] || [[ "${p}" == *"/${dir}/plugins/"* ]]; then IFS="${saved_ifs}"; return 0; fi
+    if [[ "${p}" == "${dir}/config.json" ]] || [[ "${p}" == *"/${dir}/config.json" ]]; then IFS="${saved_ifs}"; return 0; fi
+  done
+  IFS="${saved_ifs}"
   return 1
 }
 
-if is_protected_claude_path "${file_path}"; then
+if is_protected_agent_path "${file_path}"; then
   cat <<EOF
-{"decision": "block", "reason": "Protected Claude Code config (${basename}). Hook scripts and settings are immutable."}
+{"decision": "block", "reason": "Protected agent config (${basename}). Hook scripts and settings are immutable."}
 EOF
   exit 0
 fi
@@ -91,7 +113,8 @@ _normalize_path() {
 # Dynamic protection for config-specified subprocess settings file
 protect_configured_settings() {
   local candidate="$1"
-  local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  local config_file
+  config_file=$(_resolve_config_path)
   [[ -f "${config_file}" ]] || return 1
   command -v jaq >/dev/null 2>&1 || return 1
 
@@ -119,7 +142,8 @@ fi
 
 # Load protected files from config, or use defaults
 load_protected_files() {
-  local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  local config_file
+  config_file=$(_resolve_config_path)
   if [[ -f "${config_file}" ]] && command -v jaq >/dev/null 2>&1; then
     local files
     files=$(jaq -r '.protected_files // [] | .[]' "${config_file}" 2>/dev/null)

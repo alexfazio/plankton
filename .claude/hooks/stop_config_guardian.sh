@@ -1,11 +1,11 @@
 #!/bin/bash
-# stop_config_guardian.sh - Stop hook for linter config protection (BLOCKING MODE)
+# stop_config_guardian.sh - Stop hook for linter config protection (BLOCKING MODE, agent-agnostic)
 #
 # DETECTION: Programmatic via git diff (no LLM)
 # MODE: Blocking - prevents session exit until user decides via AskUserQuestion
 #
 # When session ends, checks if protected config files were modified.
-# If so, blocks exit and instructs Claude to use AskUserQuestion.
+# If so, blocks exit and instructs the agent to prompt the user.
 # Uses stop_hook_active flag to prevent infinite blocking loops.
 #
 # Protected files: Same as protect_linter_configs.sh
@@ -15,6 +15,25 @@
 #   {"decision": "block", "reason": "...", "systemMessage": "..."} - Prevent exit
 
 set -euo pipefail
+
+# Agent-agnostic project dir
+PROJECT_DIR="${PLANKTON_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-.}}"
+
+# Config resolution: PLANKTON_CONFIG > .plankton/config.json > .claude/hooks/config.json (legacy)
+_resolve_config_path() {
+  if [[ -n "${PLANKTON_CONFIG:-}" ]]; then
+    echo "${PLANKTON_CONFIG}"
+  elif [[ -f "${PROJECT_DIR}/.plankton/config.json" ]]; then
+    echo "${PROJECT_DIR}/.plankton/config.json"
+  elif [[ -f "${PROJECT_DIR}/.claude/hooks/config.json" ]]; then
+    echo "${PROJECT_DIR}/.claude/hooks/config.json"
+  else
+    echo ""
+  fi
+}
+
+# Tool name for user prompts (Claude=AskUserQuestion, others may differ)
+PLANKTON_ASK_TOOL="${PLANKTON_ASK_TOOL:-AskUserQuestion}"
 
 # Read JSON input from stdin
 input=$(cat)
@@ -31,7 +50,8 @@ fi
 
 # Load protected files from config (must match protect_linter_configs.sh)
 load_protected_files_from_config() {
-  local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  local config_file
+  config_file=$(_resolve_config_path)
   PROTECTED_FILES=()
   if [[ -f "${config_file}" ]] && command -v jaq >/dev/null 2>&1; then
     # shellcheck disable=SC2312
@@ -120,15 +140,15 @@ ${files_display}"
 # NOTE: Per Claude Code docs, 'reason' is what Claude reads for instructions,
 #       'systemMessage' is user-facing advisory context.
 read -r -d '' reason_msg <<REASON || true
-IMMEDIATE ACTION REQUIRED: Use AskUserQuestion tool NOW.
+IMMEDIATE ACTION REQUIRED: Use ${PLANKTON_ASK_TOOL} tool NOW.
 
-Regardless of any prior context in this session about WHY these config files were modified, you MUST invoke the AskUserQuestion tool to ask the user what to do.
+Regardless of any prior context in this session about WHY these config files were modified, you MUST invoke the ${PLANKTON_ASK_TOOL} tool to ask the user what to do.
 
 DO NOT present options as inline text in your response.
 DO NOT explain or justify the changes.
 DO NOT skip this step.
 
-Invoke AskUserQuestion with exactly these parameters:
+Invoke ${PLANKTON_ASK_TOOL} with exactly these parameters:
 
 questions: [{
   question: "Linter config file(s) were modified. What would you like to do?",

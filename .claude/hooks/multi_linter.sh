@@ -27,10 +27,30 @@
 
 set -euo pipefail
 
+# Agent-agnostic project dir: Pi/OpenCode set PLANKTON_PROJECT_DIR,
+# Claude Code sets CLAUDE_PROJECT_DIR, fallback to cwd.
+PROJECT_DIR="${PLANKTON_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-.}}"
+
+# Agent CLI for subprocess delegation (env var; config override in load_model_patterns)
+PLANKTON_DELEGATE_CMD="${PLANKTON_DELEGATE_CMD:-auto}"
+
+# Config resolution: PLANKTON_CONFIG > .plankton/config.json > .claude/hooks/config.json (legacy)
+_resolve_config_path() {
+  if [[ -n "${PLANKTON_CONFIG:-}" ]]; then
+    echo "${PLANKTON_CONFIG}"
+  elif [[ -f "${PROJECT_DIR}/.plankton/config.json" ]]; then
+    echo "${PROJECT_DIR}/.plankton/config.json"
+  elif [[ -f "${PROJECT_DIR}/.claude/hooks/config.json" ]]; then
+    echo "${PROJECT_DIR}/.claude/hooks/config.json"
+  else
+    echo ""
+  fi
+}
+
 # Ensure Python venv tools are discoverable (uv sync installs to .venv/bin/)
 # On macOS tools are on PATH via brew; on Linux they're only in the venv.
-if [[ -d "${CLAUDE_PROJECT_DIR:-.}/.venv/bin" ]]; then
-  export PATH="${CLAUDE_PROJECT_DIR:-.}/.venv/bin:${PATH}"
+if [[ -d "${PROJECT_DIR}/.venv/bin" ]]; then
+  export PATH="${PROJECT_DIR}/.venv/bin:${PATH}"
 fi
 
 trap 'kill 0' SIGTERM
@@ -84,7 +104,8 @@ SESSION_PID="${HOOK_SESSION_PID:-${PPID}}"
 
 # Load configuration from config.json (falls back to all-enabled if missing)
 load_config() {
-  local config_file="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/config.json"
+  local config_file
+  config_file=$(_resolve_config_path)
   if [[ -f "${config_file}" ]]; then
     CONFIG_JSON=$(cat "${config_file}")
   else
@@ -109,7 +130,7 @@ get_security_linter_exclusions() {
 }
 
 get_bandit_config_file() {
-  local config_file="${CLAUDE_PROJECT_DIR:-.}/pyproject.toml"
+  local config_file="${PROJECT_DIR}/pyproject.toml"
   if [[ -f "${config_file}" ]]; then
     printf '%s\n' "${config_file}"
   fi
@@ -186,6 +207,13 @@ load_model_patterns() {
   [[ -z "${SONNET_TOOLS}" ]] && SONNET_TOOLS="Edit,Read"
   OPUS_TOOLS=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.tiers.opus.tools // empty' 2>/dev/null) || true
   [[ -z "${OPUS_TOOLS}" ]] && OPUS_TOOLS="Edit,Read,Write"
+
+  # Agent delegation command from config (env var takes precedence)
+  if [[ "${PLANKTON_DELEGATE_CMD}" == "auto" ]]; then
+    local _cfg_delegate
+    _cfg_delegate=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.delegate_cmd // empty' 2>/dev/null) || true
+    [[ -n "${_cfg_delegate}" ]] && PLANKTON_DELEGATE_CMD="${_cfg_delegate}"
+  fi
 
   readonly HAIKU_CODE_PATTERN SONNET_CODE_PATTERN OPUS_CODE_PATTERN VOLUME_THRESHOLD
   readonly GLOBAL_MODEL_OVERRIDE MAX_TURNS_OVERRIDE TIMEOUT_OVERRIDE
@@ -322,9 +350,9 @@ file_path=$(jaq -r '.tool_input?.file_path? // .tool_input?.notebook_path? // em
 is_excluded_from_security_linters() {
   local fp="$1"
 
-  # Normalize absolute paths to relative (using CLAUDE_PROJECT_DIR if available)
-  if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]] && [[ "${fp}" == "${CLAUDE_PROJECT_DIR}"/* ]]; then
-    fp="${fp#"${CLAUDE_PROJECT_DIR}"/}"
+  # Normalize absolute paths to relative (using PROJECT_DIR if available)
+  if [[ -n "${PROJECT_DIR:-}" ]] && [[ "${fp}" == "${PROJECT_DIR}"/* ]]; then
+    fp="${fp#"${PROJECT_DIR}"/}"
   fi
 
   local exclusion
@@ -342,6 +370,234 @@ is_excluded_from_security_linters() {
 # ============================================================================
 # DELEGATION FUNCTIONS
 # ============================================================================
+
+_delegate_claude() {
+  local fp="$1" prompt="$2" model="$3" tier_tools="$4" tier_max_turns="$5" tier_timeout="$6"
+
+  local claude_cmd=""
+  if command -v claude >/dev/null 2>&1; then
+    claude_cmd="claude"
+  else
+    local search_dirs="${HOME}/.local/bin ${HOME}/.npm-global/bin /usr/local/bin"
+    for dir in ${search_dirs}; do
+      if [[ -x "${dir}/claude" ]]; then
+        claude_cmd="${dir}/claude"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "${claude_cmd}" ]]; then
+    echo "[hook:error] claude binary not found, cannot delegate" >&2
+    return 0
+  fi
+
+  # Resolve settings file: config override > project-local default
+  local settings_file
+  settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
+  settings_file="${settings_file/#\~/${HOME}}"
+  if [[ -z "${settings_file}" ]]; then
+    settings_file="${PROJECT_DIR}/.claude/subprocess-settings.json"
+  fi
+
+  # Auto-create if missing (atomic mktemp+mv for concurrent invocations)
+  if [[ ! -f "${settings_file}" ]]; then
+    local settings_dir
+    settings_dir=$(dirname "${settings_file}")
+    mkdir -p "${settings_dir}"
+    local tmpfile
+    tmpfile=$(mktemp "${settings_file}.XXXXXX") || {
+      echo "[hook:error] failed to create temp file for settings" >&2
+      return 1
+    }
+    cat >"${tmpfile}" <<'SETTINGS_EOF'
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "disableAllHooks": true,
+  "skipDangerousModePermissionPrompt": true
+}
+SETTINGS_EOF
+    if mv "${tmpfile}" "${settings_file}" 2>/dev/null; then
+      echo "[hook:warning] created missing ${settings_file}" >&2
+    else
+      rm -f "${tmpfile}"
+    fi
+  fi
+
+  local timeout_cmd=""
+  command -v timeout >/dev/null 2>&1 && timeout_cmd="timeout ${tier_timeout}"
+
+  # Derive disallowed tools: universe minus allowed
+  local tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task,AskUserQuestion,EnterPlanMode,ExitPlanMode"
+  local disallowed_tools=""
+  local IFS_BAK="${IFS}"
+  IFS=','
+  for tool in ${tool_universe}; do
+    local is_allowed="false"
+    for at in ${tier_tools}; do
+      if [[ "${tool}" == "${at}" ]]; then
+        is_allowed="true"
+        break
+      fi
+    done
+    if [[ "${is_allowed}" == "false" ]]; then
+      if [[ -n "${disallowed_tools}" ]]; then
+        disallowed_tools="${disallowed_tools},${tool}"
+      else
+        disallowed_tools="${tool}"
+      fi
+    fi
+  done
+  IFS="${IFS_BAK}"
+
+  local file_hash_before=""
+  [[ -f "${fp}" ]] && file_hash_before=$(cksum "${fp}" 2>/dev/null || true)
+
+  local disallowed_flag=()
+  [[ -n "${disallowed_tools}" ]] && disallowed_flag=(--disallowedTools "${disallowed_tools}")
+
+  local subprocess_exit=0
+  ${timeout_cmd} env -u CLAUDECODE "${claude_cmd}" -p "${prompt}" \
+    --dangerously-skip-permissions \
+    --setting-sources "" \
+    --settings "${settings_file}" \
+    "${disallowed_flag[@]}" \
+    --max-turns "${tier_max_turns}" \
+    --model "${model}" \
+    "${fp}" >/dev/null || subprocess_exit=$?
+
+  local file_hash_after=""
+  [[ -f "${fp}" ]] && file_hash_after=$(cksum "${fp}" 2>/dev/null || true)
+  [[ "${file_hash_before}" != "${file_hash_after}" ]] && echo "[hook:subprocess] file modified" >&2 || echo "[hook:subprocess] file unchanged" >&2
+
+  if [[ "${subprocess_exit}" -ne 0 ]]; then
+    if [[ "${subprocess_exit}" -eq 124 ]]; then
+      echo "[hook:warning] subprocess timed out (exit ${subprocess_exit})" >&2
+    else
+      echo "[hook:warning] subprocess failed (exit ${subprocess_exit})" >&2
+    fi
+  fi
+}
+
+_delegate_pi() {
+  local fp="$1" prompt="$2" model="$3" tier_tools="$4" tier_max_turns="$5" tier_timeout="$6"
+
+  local pi_cmd=""
+  command -v pi >/dev/null 2>&1 && pi_cmd="pi"
+  [[ -z "${pi_cmd}" ]] && { echo "[hook:error] pi binary not found" >&2; return 0; }
+
+  local pi_model
+  case "${model}" in
+    haiku)  pi_model="anthropic/claude-haiku-4-5" ;;
+    sonnet) pi_model="anthropic/claude-sonnet-4-5" ;;
+    opus)   pi_model="anthropic/claude-opus-4" ;;
+    *)      pi_model="${model}" ;;
+  esac
+
+  # Map allowed tools: Claude's Edit,Read,Write -> Pi's edit,read,write
+  local pi_tools
+  pi_tools=$(echo "${tier_tools}" | tr '[:upper:]' '[:lower:]')
+
+  local timeout_cmd=""
+  command -v timeout >/dev/null 2>&1 && timeout_cmd="timeout ${tier_timeout}"
+
+  local file_hash_before=""
+  [[ -f "${fp}" ]] && file_hash_before=$(cksum "${fp}" 2>/dev/null || true)
+
+  local subprocess_exit=0
+  ${timeout_cmd} "${pi_cmd}" -p "${prompt}" \
+    --tools "${pi_tools}" \
+    --model "${pi_model}" \
+    --no-session \
+    --no-extensions \
+    "@${fp}" >/dev/null 2>&1 || subprocess_exit=$?
+
+  local file_hash_after=""
+  [[ -f "${fp}" ]] && file_hash_after=$(cksum "${fp}" 2>/dev/null || true)
+  [[ "${file_hash_before}" != "${file_hash_after}" ]] && echo "[hook:subprocess] file modified" >&2 || echo "[hook:subprocess] file unchanged" >&2
+
+  if [[ "${subprocess_exit}" -ne 0 ]]; then
+    echo "[hook:warning] pi subprocess failed (exit ${subprocess_exit})" >&2
+  fi
+}
+
+_delegate_opencode() {
+  local fp="$1" prompt="$2" model="$3" tier_tools="$4" tier_max_turns="$5" tier_timeout="$6"
+
+  local oc_cmd=""
+  command -v opencode >/dev/null 2>&1 && oc_cmd="opencode"
+  [[ -z "${oc_cmd}" ]] && { echo "[hook:error] opencode binary not found" >&2; return 0; }
+
+  # Map plankton tier names to opencode model IDs.
+  # PLANKTON_OC_MODEL_<TIER> env vars allow user override.
+  # When the tier maps to "default", --model is omitted and opencode uses
+  # whatever model the user has configured globally.
+  local oc_model
+  case "${model}" in
+    haiku)  oc_model="${PLANKTON_OC_MODEL_HAIKU:-default}" ;;
+    sonnet) oc_model="${PLANKTON_OC_MODEL_SONNET:-default}" ;;
+    opus)   oc_model="${PLANKTON_OC_MODEL_OPUS:-default}" ;;
+    *)      oc_model="${model}" ;;
+  esac
+
+  local model_flag=()
+  if [[ "${oc_model}" != "default" ]]; then
+    model_flag=(--model "${oc_model}")
+  fi
+
+  local timeout_cmd=""
+  command -v timeout >/dev/null 2>&1 && timeout_cmd="timeout ${tier_timeout}"
+
+  local file_hash_before=""
+  [[ -f "${fp}" ]] && file_hash_before=$(cksum "${fp}" 2>/dev/null || true)
+
+  # Disable plugins to prevent recursion; use plankton-fixer agent for
+  # tool restriction + auto-approve; inline permission as fallback.
+  local subprocess_exit=0
+  ${timeout_cmd} env \
+    OPENCODE_DISABLE_DEFAULT_PLUGINS=true \
+    OPENCODE_PERMISSION='{"edit":"allow","bash":"deny"}' \
+    "${oc_cmd}" run \
+    --agent "plankton-fixer" \
+    "${model_flag[@]}" \
+    --file "${fp}" -- \
+    "${prompt}" >/dev/null 2>&1 || subprocess_exit=$?
+
+  local file_hash_after=""
+  [[ -f "${fp}" ]] && file_hash_after=$(cksum "${fp}" 2>/dev/null || true)
+  [[ "${file_hash_before}" != "${file_hash_after}" ]] && echo "[hook:subprocess] file modified" >&2 || echo "[hook:subprocess] file unchanged" >&2
+
+  if [[ "${subprocess_exit}" -ne 0 ]]; then
+    echo "[hook:warning] opencode subprocess failed (exit ${subprocess_exit})" >&2
+  fi
+}
+
+delegate_with_agent() {
+  local fp="$1" prompt="$2" model="$3" tier_tools="$4" tier_max_turns="$5" tier_timeout="$6"
+  local delegate_cmd="${PLANKTON_DELEGATE_CMD}"
+
+  # Auto-detect: try claude first, then pi, then opencode, then skip
+  if [[ "${delegate_cmd}" == "auto" ]]; then
+    if command -v claude >/dev/null 2>&1; then delegate_cmd="claude"
+    elif command -v pi >/dev/null 2>&1; then delegate_cmd="pi"
+    elif command -v opencode >/dev/null 2>&1; then delegate_cmd="opencode"
+    else delegate_cmd="none"; fi
+  fi
+
+  case "${delegate_cmd}" in
+    claude)   _delegate_claude "$@" ;;
+    pi)       _delegate_pi "$@" ;;
+    opencode) _delegate_opencode "$@" ;;
+    none)
+      echo "[hook:info] subprocess delegation disabled (no agent CLI found)" >&2
+      return 0
+      ;;
+    *)
+      echo "[hook:warning] unknown delegate_cmd '${delegate_cmd}', skipping delegation" >&2
+      return 0
+      ;;
+  esac
+}
 
 # Spawn claude subprocess to fix violations
 spawn_fix_subprocess() {
@@ -513,146 +769,15 @@ RULES:
 Do not add comments explaining fixes. Do not refactor beyond what's needed."
   fi
 
-  # Find claude binary
-  local claude_cmd=""
-  if command -v claude >/dev/null 2>&1; then
-    claude_cmd="claude"
-  else
-    # Search in common locations
-    local search_dirs="${HOME}/.local/bin ${HOME}/.npm-global/bin /usr/local/bin"
-    for dir in ${search_dirs}; do
-      if [[ -x "${dir}/claude" ]]; then
-        claude_cmd="${dir}/claude"
-        break
-      fi
-    done
-  fi
-
-  if [[ -z "${claude_cmd}" ]]; then
-    echo "[hook:error] claude binary not found, cannot delegate" >&2
-    return 0
-  fi
-
-  # Resolve settings file: config override > project-local default
-  local settings_file
-  settings_file=$(echo "${CONFIG_JSON}" | jaq -r '.subprocess.settings_file // empty' 2>/dev/null) || true
-  # Expand leading tilde to $HOME
-  settings_file="${settings_file/#\~/${HOME}}"
-  if [[ -z "${settings_file}" ]]; then
-    settings_file="${CLAUDE_PROJECT_DIR:-.}/.claude/subprocess-settings.json"
-  fi
-
-  # Auto-create if missing (atomic mktemp+mv for concurrent invocations)
-  if [[ ! -f "${settings_file}" ]]; then
-    local settings_dir
-    settings_dir=$(dirname "${settings_file}")
-    mkdir -p "${settings_dir}"
-    local tmpfile
-    tmpfile=$(mktemp "${settings_file}.XXXXXX") || {
-      echo "[hook:error] failed to create temp file for settings" >&2
-      return 1
-    }
-    cat >"${tmpfile}" <<'SETTINGS_EOF'
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "disableAllHooks": true,
-  "skipDangerousModePermissionPrompt": true
-}
-SETTINGS_EOF
-    if mv "${tmpfile}" "${settings_file}" 2>/dev/null; then
-      echo "[hook:warning] created missing ${settings_file}" >&2
-    else
-      rm -f "${tmpfile}" # Lost race - another process created it first
-    fi
-  fi
-  # Use timeout if available (requires GNU coreutils on macOS: brew install coreutils)
-  local effective_timeout="${tier_timeout}"
-  local timeout_cmd=""
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd="timeout ${effective_timeout}"
-  fi
-
-  # Tool universe for --disallowedTools derivation (pinned to cc_tested_version)
-  # Update when upgrading cc_tested_version in config.json
-  local tool_universe="Edit,Read,Write,Bash,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task,AskUserQuestion,EnterPlanMode,ExitPlanMode"
-  local allowed_tools="${tier_tools}"
-
-  # Derive disallowed tools: universe minus allowed
-  local disallowed_tools=""
-  local IFS_BAK="${IFS}"
-  IFS=','
-  for tool in ${tool_universe}; do
-    local is_allowed="false"
-    for at in ${allowed_tools}; do
-      if [[ "${tool}" == "${at}" ]]; then
-        is_allowed="true"
-        break
-      fi
-    done
-    if [[ "${is_allowed}" == "false" ]]; then
-      if [[ -n "${disallowed_tools}" ]]; then
-        disallowed_tools="${disallowed_tools},${tool}"
-      else
-        disallowed_tools="${tool}"
-      fi
-    fi
-  done
-  IFS="${IFS_BAK}"
-
-  if [[ -z "${disallowed_tools}" ]]; then
-    echo "[hook:warning] all tools allowed for tier (disallowedTools is empty)" >&2
-  fi
-  # Log subprocess parameters for diagnostics
-  echo "[hook:subprocess] model=${model} tools=${allowed_tools} max_turns=${tier_max_turns} timeout=${effective_timeout}" >&2
-
-  # Capture file state before subprocess for modification detection
-  local file_hash_before=""
-  if [[ -f "${fp}" ]]; then
-    file_hash_before=$(cksum "${fp}" 2>/dev/null || true)
-  fi
-
-  # Spawn subprocess — stderr flows through for observability (visible via
-  # claude --debug), stdout discarded. Safety invariant: --dangerously-skip-permissions
-  # is never passed without --disallowedTools also being present.
-  local disallowed_flag=()
-  if [[ -n "${disallowed_tools}" ]]; then
-    disallowed_flag=(--disallowedTools "${disallowed_tools}")
-  fi
+  # Dispatch to agent-specific delegate
+  echo "[hook:subprocess] model=${model} tools=${tier_tools} max_turns=${tier_max_turns} timeout=${tier_timeout}" >&2
   local delegate_started=${SECONDS}
-  hook_diag "phase=delegate_start tool=${tool_name} file=${fp} ftype=${ftype} model=${model} max_turns=${tier_max_turns} timeout=${effective_timeout} allowed_tools=${allowed_tools} count=${prompt_count} codes=${prompt_codes}"
-  subprocess_exit=0
-  ${timeout_cmd} env -u CLAUDECODE "${claude_cmd}" -p "${prompt}" \
-    --dangerously-skip-permissions \
-    --setting-sources "" \
-    --settings "${settings_file}" \
-    "${disallowed_flag[@]}" \
-    --max-turns "${tier_max_turns}" \
-    --model "${model}" \
-    "${fp}" >/dev/null || subprocess_exit=$?
+  hook_diag "phase=delegate_start tool=${tool_name} file=${fp} ftype=${ftype} model=${model} max_turns=${tier_max_turns} timeout=${tier_timeout} allowed_tools=${tier_tools} count=${prompt_count} codes=${prompt_codes}"
 
-  # Detect file modification
-  local file_hash_after=""
-  if [[ -f "${fp}" ]]; then
-    file_hash_after=$(cksum "${fp}" 2>/dev/null || true)
-  fi
-  if [[ "${file_hash_before}" != "${file_hash_after}" ]]; then
-    echo "[hook:subprocess] file modified" >&2
-  else
-    echo "[hook:subprocess] file unchanged" >&2
-  fi
+  delegate_with_agent "${fp}" "${prompt}" "${model}" "${tier_tools}" "${tier_max_turns}" "${tier_timeout}"
+
   local delegate_duration=$((SECONDS - delegate_started))
-  local _changed="no"
-  [[ "${file_hash_before}" != "${file_hash_after}" ]] && _changed="yes"
-  hook_diag "phase=delegate_end tool=${tool_name} file=${fp} ftype=${ftype} model=${model} exit=${subprocess_exit} changed=${_changed} duration_s=${delegate_duration}"
-
-  # Report subprocess failures (but don't fail the hook)
-  if [[ "${subprocess_exit}" -ne 0 ]]; then
-    if [[ "${subprocess_exit}" -eq 124 ]]; then
-      echo "[hook:warning] subprocess timed out (exit ${subprocess_exit})" >&2
-    else
-      echo "[hook:warning] subprocess failed (exit ${subprocess_exit})" >&2
-    fi
-  fi
+  hook_diag "phase=delegate_end tool=${tool_name} file=${fp} ftype=${ftype} model=${model} duration_s=${delegate_duration}"
 }
 
 # Re-run Phase 1 auto-fix for a file type
@@ -720,9 +845,9 @@ rerun_phase1() {
         local rel_path
         rel_path=$(_biome_relpath "${fp}")
         if [[ -n "${_unsafe_flag}" ]]; then
-          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "${_unsafe_flag}" "${rel_path}") >/dev/null 2>&1 || true
+          (cd "${PROJECT_DIR}" && ${_biome_cmd} check --write "${_unsafe_flag}" "${rel_path}") >/dev/null 2>&1 || true
         else
-          (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
+          (cd "${PROJECT_DIR}" && ${_biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
         fi
       fi
       ;;
@@ -881,7 +1006,7 @@ rerun_phase2() {
         local biome_out
         local rel_path
         rel_path=$(_biome_relpath "${fp}")
-        biome_out=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${_biome_cmd} lint --reporter=json "${rel_path}") 2>/dev/null || true)
+        biome_out=$( (cd "${PROJECT_DIR}" && ${_biome_cmd} lint --reporter=json "${rel_path}") 2>/dev/null || true)
         if [[ -n "${biome_out}" ]]; then
           count=$(echo "${biome_out}" | jaq '[(.diagnostics // [])[] |
             select(.severity == "error" or .severity == "warning")] | length' 2>/dev/null | head -n1 || echo "0")
@@ -958,12 +1083,12 @@ _handle_semgrep_session() {
     file_count=$(wc -l <"${session_file}" 2>/dev/null | tr -d ' ')
     if [[ "${file_count}" -ge 3 ]] && [[ ! -f "${session_file}.done" ]]; then
       touch "${session_file}.done"
-      if command -v semgrep >/dev/null 2>&1 && [[ -f "${CLAUDE_PROJECT_DIR:-.}/.semgrep.yml" ]]; then
+      if command -v semgrep >/dev/null 2>&1 && [[ -f "${PROJECT_DIR}/.semgrep.yml" ]]; then
         local semgrep_files
         semgrep_files=$(sort -u "${session_file}" | tr '\n' ' ') || semgrep_files=""
         local semgrep_result
         # shellcheck disable=SC2086  # Intentional word splitting for file list
-        semgrep_result=$(semgrep --json --config "${CLAUDE_PROJECT_DIR:-.}/.semgrep.yml" \
+        semgrep_result=$(semgrep --json --config "${PROJECT_DIR}/.semgrep.yml" \
           ${semgrep_files} 2>/dev/null || true)
         if [[ -n "${semgrep_result}" ]]; then
           local finding_count
@@ -1019,7 +1144,7 @@ _handle_jscpd_ts_session() {
 # Nursery mismatch validation (D9)
 _validate_nursery_config() {
   local biome_cmd="$1"
-  local biome_json="${CLAUDE_PROJECT_DIR:-.}/biome.json"
+  local biome_json="${PROJECT_DIR}/biome.json"
   [[ ! -f "${biome_json}" ]] && return
 
   local config_nursery
@@ -1040,7 +1165,7 @@ _validate_nursery_config() {
 # Convert absolute path to relative for biome invocations.
 _biome_relpath() {
   local abs="$1"
-  local base="${CLAUDE_PROJECT_DIR:-.}"
+  local base="${PROJECT_DIR}"
   if [[ "${abs}" == "${base}/"* ]]; then
     echo "${abs#"${base}/"}"
   else
@@ -1096,9 +1221,9 @@ handle_typescript() {
     local rel_path
     rel_path=$(_biome_relpath "${fp}")
     if [[ "${unsafe_config}" == "true" ]]; then
-      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write --unsafe "${rel_path}") >/dev/null 2>&1 || true
+      (cd "${PROJECT_DIR}" && ${biome_cmd} check --write --unsafe "${rel_path}") >/dev/null 2>&1 || true
     else
-      (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
+      (cd "${PROJECT_DIR}" && ${biome_cmd} check --write "${rel_path}") >/dev/null 2>&1 || true
     fi
   fi
 
@@ -1115,7 +1240,7 @@ handle_typescript() {
   local biome_output
   local rel_path_lint
   rel_path_lint=$(_biome_relpath "${fp}")
-  biome_output=$( (cd "${CLAUDE_PROJECT_DIR:-.}" && ${biome_cmd} "${biome_lint_args[@]}" "${rel_path_lint}") 2>/dev/null || true)
+  biome_output=$( (cd "${PROJECT_DIR}" && ${biome_cmd} "${biome_lint_args[@]}" "${rel_path_lint}") 2>/dev/null || true)
 
   if [[ -n "${biome_output}" ]]; then
     local diag_count
