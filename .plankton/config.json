@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "cc_tested_version": "2.1.50",
+  "_comment": "Claude Code Hooks Configuration - edit this file to customize hook behavior",
+  "languages": {
+    "python": true,
+    "shell": true,
+    "yaml": true,
+    "json": true,
+    "toml": true,
+    "dockerfile": true,
+    "markdown": true,
+    "typescript": {
+      "enabled": true,
+      "js_runtime": "auto",
+      "biome_nursery": "warn",
+      "biome_unsafe_autofix": true,
+      "oxlint_tsgolint": true,
+      "tsgo": false,
+      "semgrep": true,
+      "knip": false
+    }
+  },
+  "protected_files": [
+    ".markdownlint.jsonc",
+    ".markdownlint-cli2.jsonc",
+    ".shellcheckrc",
+    ".yamllint",
+    ".hadolint.yaml",
+    ".jscpd.json",
+    ".flake8",
+    "taplo.toml",
+    ".ruff.toml",
+    "biome.json",
+    ".oxlintrc.json",
+    "ty.toml",
+    ".semgrep.yml",
+    "knip.json"
+  ],
+  "security_linter_exclusions": [
+    ".venv/",
+    "node_modules/",
+    ".git/"
+  ],
+  "phases": {
+    "auto_format": true,
+    "subprocess_delegation": true
+  },
+  "subprocess": {
+    "settings_file": ".claude/subprocess-settings.json",
+    "delegate_cmd": "auto"
+  },
+  "jscpd": {
+    "session_threshold": 3,
+    "scan_dirs": [
+      "src/",
+      "lib/"
+    ],
+    "advisory_only": true
+  },
+  "package_managers": {
+    "python": "uv",
+    "javascript": "bun",
+    "allowed_subcommands": {
+      "npm": [
+        "audit",
+        "view",
+        "pack",
+        "publish",
+        "whoami",
+        "login"
+      ],
+      "pip": [
+        "download"
+      ],
+      "yarn": [
+        "audit",
+        "info"
+      ],
+      "pnpm": [
+        "audit",
+        "info"
+      ],
+      "poetry": [],
+      "pipenv": []
+    }
+  }
+}
